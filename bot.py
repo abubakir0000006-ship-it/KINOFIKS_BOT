@@ -20,7 +20,6 @@ dp = Dispatcher()
 
 conn = sqlite3.connect('movies.db', check_same_thread=False)
 cursor = conn.cursor()
-# Добавлена колонка description
 cursor.execute('CREATE TABLE IF NOT EXISTS movies (code TEXT PRIMARY KEY, file_id TEXT, description TEXT)')
 cursor.execute('CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY)')
 conn.commit()
@@ -28,7 +27,7 @@ conn.commit()
 class AddMovie(StatesGroup):
     file_id = State()
     code = State()
-    description = State() # Новое состояние для описания
+    description = State()
 
 class Mailing(StatesGroup):
     text = State()
