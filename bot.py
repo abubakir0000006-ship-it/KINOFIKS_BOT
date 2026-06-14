@@ -20,7 +20,8 @@ dp = Dispatcher()
 
 conn = sqlite3.connect('movies.db', check_same_thread=False)
 cursor = conn.cursor()
-cursor.execute('CREATE TABLE IF NOT EXISTS movies (code TEXT PRIMARY KEY, file_id TEXT, description TEXT)')
+# Добавил колонки для лайков
+cursor.execute('CREATE TABLE IF NOT EXISTS movies (code TEXT PRIMARY KEY, file_id TEXT, description TEXT, likes INTEGER DEFAULT 0, dislikes INTEGER DEFAULT 0)')
 cursor.execute('CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY)')
 conn.commit()
 
@@ -49,6 +50,17 @@ async def start(message: types.Message):
         await message.answer("👑 Admin panel:", reply_markup=admin_kb)
     else:
         await message.answer("🎬 Kino kodini yuboring:")
+
+@dp.callback_query(F.data.startswith("like_"))
+async def handle_like(call: types.CallbackQuery):
+    code = call.data.split("_")[1]
+    action = call.data.split("_")[2]
+    if action == "up":
+        cursor.execute('UPDATE movies SET likes = likes + 1 WHERE code = ?', (code,))
+    else:
+        cursor.execute('UPDATE movies SET dislikes = dislikes + 1 WHERE code = ?', (code,))
+    conn.commit()
+    await call.answer("✅ Ovoz berdingiz!")
 
 @dp.message(F.text == "📊 Statistika")
 async def stats(message: types.Message):
@@ -89,7 +101,7 @@ async def get_video(message: types.Message, state: FSMContext):
 @dp.message(AddMovie.code)
 async def get_code(message: types.Message, state: FSMContext):
     await state.update_data(code=message.text)
-    await message.answer("📝 Endi kinosining tavsifini (opisaniyasini) yozing:")
+    await message.answer("📝 Endi kinosining tavsifini yozing:")
     await state.set_state(AddMovie.description)
 
 @dp.message(AddMovie.description)
@@ -116,16 +128,26 @@ async def delete_process(message: types.Message, state: FSMContext):
 
 @dp.message(F.text == "🔥 Tasodifiy kino")
 async def random_movie(message: types.Message):
-    cursor.execute('SELECT code, file_id, description FROM movies ORDER BY RANDOM() LIMIT 1')
+    cursor.execute('SELECT code, file_id, description, likes, dislikes FROM movies ORDER BY RANDOM() LIMIT 1')
     res = cursor.fetchone()
-    if res: await bot.send_video(message.chat.id, res[1], caption=f"✨ {res[2]}\n\n🎬 Kod: {res[0]}")
+    if res:
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=f"👍 {res[3]}", callback_data=f"like_{res[0]}_up"), 
+             InlineKeyboardButton(text=f"👎 {res[4]}", callback_data=f"like_{res[0]}_down")]
+        ])
+        await bot.send_video(message.chat.id, res[1], caption=f"✨ {res[2]}\n\n🎬 Kod: {res[0]}", reply_markup=kb)
     else: await message.answer("❌ Bazada hali kino yo'q.")
 
 @dp.message(F.text)
 async def search_movie(message: types.Message):
-    cursor.execute('SELECT file_id, description FROM movies WHERE code = ?', (message.text,))
+    cursor.execute('SELECT code, file_id, description, likes, dislikes FROM movies WHERE code = ?', (message.text,))
     res = cursor.fetchone()
-    if res: await bot.send_video(message.chat.id, res[0], caption=f"{res[1]}\n\n🎬 Kod: {message.text}")
+    if res:
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=f"👍 {res[3]}", callback_data=f"like_{res[0]}_up"), 
+             InlineKeyboardButton(text=f"👎 {res[4]}", callback_data=f"like_{res[0]}_down")]
+        ])
+        await bot.send_video(message.chat.id, res[1], caption=f"{res[2]}\n\n🎬 Kod: {res[0]}", reply_markup=kb)
     else: await message.answer("❌ Topilmadi.")
 
 async def run_web():
