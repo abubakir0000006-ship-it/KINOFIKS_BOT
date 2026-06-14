@@ -11,9 +11,9 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 logging.basicConfig(level=logging.INFO)
 
-# Твои данные
+# Твой ТОКЕН и ID канала
 API_TOKEN = '8697886925:AAGJJwn-GfKWPGb4yoUzyA-ChTdURToQ1Ac'
-CHANNEL_ID = -1002164478839 # Убедись, что ID канала верный
+CHANNEL_ID = -1004399893412 # Теперь тут твой новый ID
 ADMINS = [8350819510]
 
 bot = Bot(token=API_TOKEN)
@@ -31,9 +31,12 @@ class AddMovie(StatesGroup):
 
 async def is_subscribed(user_id):
     try:
+        # Проверка статуса пользователя в канале
         member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
+        # Статусы, которые означают, что человек подписан
         return member.status in ['member', 'administrator', 'creator']
-    except:
+    except Exception as e:
+        logging.error(f"Ошибка проверки подписки: {e}")
         return False
 
 @dp.message(Command("start"))
@@ -50,7 +53,7 @@ async def start(message: types.Message):
 @dp.callback_query(F.data == "check_sub")
 async def check_sub(call: types.CallbackQuery):
     if await is_subscribed(call.from_user.id):
-        await call.message.answer("✅ Rahmat! Endi kino kodini yuboring.")
+        await call.message.answer("✅ Rahmat! Obuna tasdiqlandi. Endi kino kodini yuboring.")
     else:
         await call.answer("❌ Siz hali kanalga obuna bo'lmagansiz!", show_alert=True)
 
@@ -71,6 +74,7 @@ async def get_code(message: types.Message, state: FSMContext):
 
 @dp.message(F.text)
 async def search_movie(message: types.Message):
+    # Проверка подписки перед выдачей фильма
     if not await is_subscribed(message.from_user.id):
         await message.answer("❌ Botdan foydalanish uchun kanalga obuna bo'ling!")
         return
