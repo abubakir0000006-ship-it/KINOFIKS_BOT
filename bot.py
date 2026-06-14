@@ -11,8 +11,10 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeybo
 
 logging.basicConfig(level=logging.INFO)
 
+# Твои данные
 API_TOKEN = '8697886925:AAGJJwn-GfKWPGb4yoUzyA-ChTdURToQ1Ac'
 CHANNEL_ID = -1004399893412
+CHANNEL_URL = "https://t.me/+PpgAdF1iQ8xhODEy"
 ADMINS = [8925518277, 8350819510]
 
 bot = Bot(token=API_TOKEN)
@@ -20,7 +22,7 @@ dp = Dispatcher()
 
 conn = sqlite3.connect('movies.db', check_same_thread=False)
 cursor = conn.cursor()
-cursor.execute('CREATE TABLE IF NOT EXISTS movies (code TEXT PRIMARY KEY, file_id TEXT, description TEXT, likes INTEGER DEFAULT 0, dislikes INTEGER DEFAULT 0, views INTEGER DEFAULT 0)')
+cursor.execute('CREATE TABLE IF NOT EXISTS movies (code TEXT PRIMARY KEY, file_id TEXT, description TEXT, likes INTEGER DEFAULT 0, dislikes INTEGER DEFAULT 0)')
 cursor.execute('CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, viewed_count INTEGER DEFAULT 0)')
 conn.commit()
 
@@ -35,6 +37,7 @@ class Mailing(StatesGroup):
 class DelMovie(StatesGroup):
     code = State()
 
+# Клавиатуры
 admin_kb = ReplyKeyboardMarkup(keyboard=[
     [KeyboardButton(text="➕ Kino qo'shish"), KeyboardButton(text="🗑 Kino o'chirish")],
     [KeyboardButton(text="📊 Statistika"), KeyboardButton(text="📢 Xabar yuborish")],
@@ -51,7 +54,9 @@ async def is_subscribed(user_id):
     try:
         member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
         return member.status in ['member', 'administrator', 'creator']
-    except: return False
+    except Exception as e:
+        logging.error(f"Ошибка проверки подписки: {e}")
+        return False
 
 @dp.message(Command("start"))
 async def start(message: types.Message):
@@ -61,7 +66,7 @@ async def start(message: types.Message):
         await message.answer("👑 Admin panel:", reply_markup=admin_kb)
     elif not await is_subscribed(message.from_user.id):
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📢 Obuna bo'lish", url="https://t.me/+PpgAdF1iQ8xhODEy")],
+            [InlineKeyboardButton(text="📢 Obuna bo'lish", url=CHANNEL_URL)],
             [InlineKeyboardButton(text="✅ Tekshirish", callback_data="check_sub")]
         ])
         await message.answer("👋 Kino ko'rish uchun kanalga obuna bo'ling!", reply_markup=kb)
@@ -73,7 +78,7 @@ async def check_sub(call: types.CallbackQuery):
     if await is_subscribed(call.from_user.id):
         await call.message.edit_text("✅ Rahmat! Kino kodini yuboring.", reply_markup=user_kb)
     else:
-        await call.answer("❌ Obuna bo'lmadingiz!", show_alert=True)
+        await call.answer("❌ Obuna bo'lmadingiz! Kanalga kiring.", show_alert=True)
 
 @dp.callback_query(F.data.startswith("like_"))
 async def handle_like(call: types.CallbackQuery):
@@ -88,22 +93,26 @@ async def handle_like(call: types.CallbackQuery):
 async def handle_report(call: types.CallbackQuery):
     code = call.data.split("_")[1]
     for admin in ADMINS:
-        try: await bot.send_message(admin, f"⚠️ Жалоба на фильм с кодом: {code} от пользователя {call.from_user.id}")
-        except: continue
+        try: await bot.send_message(admin, f"⚠️ Shikoyat: Kino kodi {code} (User: {call.from_user.id})")
+        except: pass
     await call.answer("✅ Shikoyat yuborildi!")
 
 @dp.message(F.text == "👤 Profil")
 async def profile(message: types.Message):
     cursor.execute('SELECT viewed_count FROM users WHERE user_id = ?', (message.from_user.id,))
-    count = cursor.fetchone()[0]
+    res = cursor.fetchone()
+    count = res[0] if res else 0
     await message.answer(f"👤 Sizning profilingiz\n🎬 Ko'rilgan kinolar soni: {count}")
 
 @dp.message(F.text == "⭐ TOP 10")
 async def top_movies(message: types.Message):
     cursor.execute('SELECT code, likes FROM movies ORDER BY likes DESC LIMIT 10')
     movies = cursor.fetchall()
+    if not movies:
+        await message.answer("❌ Hali kinolar yo'q.")
+        return
     text = "⭐ TOP 10 eng yaxshi kinolar:\n\n"
-    for m in movies: text += f"🎬 Kod: {m[0]} | 👍 {m[1]}\n"
+    for i, m in enumerate(movies, 1): text += f"{i}. 🎬 Kod: {m[0]} | 👍 {m[1]}\n"
     await message.answer(text)
 
 @dp.message(F.text == "📊 Statistika")
