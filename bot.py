@@ -31,9 +31,13 @@ class AddMovie(StatesGroup):
 class Mailing(StatesGroup):
     text = State()
 
+class DelMovie(StatesGroup):
+    code = State()
+
 admin_kb = ReplyKeyboardMarkup(keyboard=[
     [KeyboardButton(text="➕ Kino qo'shish"), KeyboardButton(text="🗑 Kino o'chirish")],
-    [KeyboardButton(text="📊 Statistika"), KeyboardButton(text="📢 Xabar yuborish")]
+    [KeyboardButton(text="📊 Statistika"), KeyboardButton(text="📢 Xabar yuborish")],
+    [KeyboardButton(text="🔥 Tasodifiy kino")]
 ], resize_keyboard=True)
 
 async def is_subscribed(user_id):
@@ -109,20 +113,33 @@ async def get_code(message: types.Message, state: FSMContext):
     await state.clear()
 
 @dp.message(F.text == "🗑 Kino o'chirish")
-async def del_movie(message: types.Message):
-    if message.from_user.id in ADMINS:
-        await message.answer("❌ O'chirmoqchi bo'lgan kodni yozing:")
+async def del_movie(message: types.Message, state: FSMContext):
+    if message.from_user.id not in ADMINS: return
+    await message.answer("❌ O'chirmoqchi bo'lgan kodni yozing:")
+    await state.set_state(DelMovie.code)
 
-@dp.message(F.text.isdigit())
-async def search_or_del(message: types.Message):
-    if message.from_user.id in ADMINS and message.text.startswith("del"): 
-        # Дополнительная защита
-        pass
-    
+@dp.message(DelMovie.code)
+async def delete_process(message: types.Message, state: FSMContext):
+    cursor.execute('DELETE FROM movies WHERE code = ?', (message.text,))
+    conn.commit()
+    await message.answer("✅ O'chirildi!", reply_markup=admin_kb)
+    await state.clear()
+
+@dp.message(F.text == "🔥 Tasodifiy kino")
+async def random_movie(message: types.Message):
     if not await is_subscribed(message.from_user.id):
         await message.answer("⚠️ Obuna bo'ling!")
         return
-        
+    cursor.execute('SELECT code, file_id FROM movies ORDER BY RANDOM() LIMIT 1')
+    res = cursor.fetchone()
+    if res: await bot.send_video(message.chat.id, res[1], caption=f"✨ Siz uchun tasodifiy kino: {res[0]}")
+    else: await message.answer("❌ Bazada hali kino yo'q.")
+
+@dp.message(F.text)
+async def search_movie(message: types.Message):
+    if not await is_subscribed(message.from_user.id):
+        await message.answer("⚠️ Obuna bo'ling!")
+        return
     cursor.execute('SELECT file_id FROM movies WHERE code = ?', (message.text,))
     res = cursor.fetchone()
     if res: await bot.send_video(message.chat.id, res[0], caption=f"🎬 Kod: {message.text}")
