@@ -28,6 +28,9 @@ class AddMovie(StatesGroup):
     file_id = State()
     code = State()
 
+class DelMovie(StatesGroup):
+    code = State()
+
 class Mailing(StatesGroup):
     text = State()
 
@@ -41,6 +44,11 @@ async def is_subscribed(user_id):
         member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
         return member.status in ['member', 'administrator', 'creator']
     except: return False
+
+@dp.message(Command("cancel"))
+async def cancel_handler(message: types.Message, state: FSMContext):
+    await state.clear()
+    await message.answer("✅ Bekor qilindi.", reply_markup=admin_kb if message.from_user.id in ADMINS else None)
 
 @dp.message(Command("start"))
 async def start(message: types.Message):
@@ -59,12 +67,14 @@ async def start(message: types.Message):
 
 @dp.message(F.text == "📊 Statistika")
 async def stats(message: types.Message):
+    if message.from_user.id not in ADMINS: return
     cursor.execute('SELECT COUNT(*) FROM users')
     count = cursor.fetchone()[0]
     await message.answer(f"👥 Jami foydalanuvchilar: {count}")
 
 @dp.message(F.text == "📢 Xabar yuborish")
 async def mailing_start(message: types.Message, state: FSMContext):
+    if message.from_user.id not in ADMINS: return
     await message.answer("📝 Yubormoqchi bo'lgan xabaringizni yozing:")
     await state.set_state(Mailing.text)
 
@@ -72,14 +82,18 @@ async def mailing_start(message: types.Message, state: FSMContext):
 async def mailing_process(message: types.Message, state: FSMContext):
     cursor.execute('SELECT user_id FROM users')
     users = cursor.fetchall()
+    count = 0
     for user in users:
-        try: await bot.send_message(user[0], message.text)
+        try: 
+            await bot.send_message(user[0], message.text)
+            count += 1
         except: continue
-    await message.answer("✅ Xabar yuborildi!", reply_markup=admin_kb)
+    await message.answer(f"✅ Xabar {count} ta foydalanuvchiga yuborildi!", reply_markup=admin_kb)
     await state.clear()
 
 @dp.message(F.text == "➕ Kino qo'shish")
 async def add_movie(message: types.Message, state: FSMContext):
+    if message.from_user.id not in ADMINS: return
     await message.answer("📹 Videoni yuboring:")
     await state.set_state(AddMovie.file_id)
 
@@ -98,22 +112,30 @@ async def get_code(message: types.Message, state: FSMContext):
     await state.clear()
 
 @dp.message(F.text == "🗑 Kino o'chirish")
-async def delete_movie_start(message: types.Message):
+async def delete_movie_start(message: types.Message, state: FSMContext):
+    if message.from_user.id not in ADMINS: return
     await message.answer("❌ O'chirmoqchi bo'lgan kino kodini yozing:")
+    await state.set_state(DelMovie.code)
 
-@dp.message(F.text.regexp(r'^\d+$'))
-async def search_or_delete(message: types.Message):
-    if message.from_user.id in ADMINS and message.text.startswith("del"): # Пример логики
-        pass
-    
+@dp.message(DelMovie.code)
+async def delete_movie_process(message: types.Message, state: FSMContext):
+    cursor.execute('DELETE FROM movies WHERE code = ?', (message.text,))
+    conn.commit()
+    await message.answer("✅ Kino o'chirildi!", reply_markup=admin_kb)
+    await state.clear()
+
+@dp.message(F.text)
+async def search_movie(message: types.Message):
     if not await is_subscribed(message.from_user.id):
-        await message.answer("⚠️ Obuna bo'ling!")
+        await message.answer("⚠️ Botdan foydalanish uchun kanalga obuna bo'ling!")
         return
         
     cursor.execute('SELECT file_id FROM movies WHERE code = ?', (message.text,))
     res = cursor.fetchone()
-    if res: await bot.send_video(message.chat.id, res[0], caption=f"🎬 Kod: {message.text}")
-    else: await message.answer("❌ Topilmadi.")
+    if res: 
+        await bot.send_video(message.chat.id, res[0], caption=f"🎬 Siz so'ragan kino: {message.text}")
+    else: 
+        await message.answer("❌ Kino topilmadi. Kodni tekshiring.")
 
 async def run_web():
     app = web.Application()
