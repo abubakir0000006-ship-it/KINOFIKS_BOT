@@ -21,70 +21,116 @@ dp = Dispatcher()
 conn = sqlite3.connect('movies.db', check_same_thread=False)
 cursor = conn.cursor()
 cursor.execute('CREATE TABLE IF NOT EXISTS movies (code TEXT PRIMARY KEY, file_id TEXT)')
+cursor.execute('CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY)')
 conn.commit()
 
 class AddMovie(StatesGroup):
     file_id = State()
     code = State()
 
+class Mailing(StatesGroup):
+    text = State()
+
+admin_kb = ReplyKeyboardMarkup(keyboard=[
+    [KeyboardButton(text="➕ Kino qo'shish"), KeyboardButton(text="🗑 Kino o'chirish")],
+    [KeyboardButton(text="📊 Statistika"), KeyboardButton(text="📢 Xabar yuborish")]
+], resize_keyboard=True)
+
 async def is_subscribed(user_id):
     try:
         member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
         return member.status in ['member', 'administrator', 'creator']
-    except:
-        return False
+    except: return False
 
 @dp.message(Command("start"))
 async def start(message: types.Message):
-    if not await is_subscribed(message.from_user.id):
+    cursor.execute('INSERT OR IGNORE INTO users (user_id) VALUES (?)', (message.from_user.id,))
+    conn.commit()
+    if message.from_user.id in ADMINS:
+        await message.answer("👑 Admin panel:", reply_markup=admin_kb)
+    elif not await is_subscribed(message.from_user.id):
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📢 Kanalga obuna bo'lish", url="https://t.me/+PpgAdF1iQ8xhODEy")],
+            [InlineKeyboardButton(text="📢 Obuna bo'lish", url="https://t.me/+PpgAdF1iQ8xhODEy")],
             [InlineKeyboardButton(text="✅ Tekshirish", callback_data="check_sub")]
         ])
-        await message.answer("👋 Botdan foydalanish uchun kanalimizga obuna bo'ling:", reply_markup=kb)
+        await message.answer("👋 Kino ko'rish uchun kanalga obuna bo'ling!", reply_markup=kb)
     else:
         await message.answer("🎬 Kino kodini yuboring:")
 
 @dp.callback_query(F.data == "check_sub")
 async def check_sub(call: types.CallbackQuery):
     if await is_subscribed(call.from_user.id):
-        await call.message.edit_text("✅ Rahmat! Obuna tasdiqlandi. Kino kodini yuboring.")
+        await call.message.edit_text("✅ Rahmat! Kino kodini yuboring.")
     else:
-        await call.answer("❌ Siz hali kanalga obuna bo'lmagansiz!", show_alert=True)
+        await call.answer("❌ Obuna bo'lmadingiz!", show_alert=True)
 
-@dp.message(F.video | F.document)
+@dp.message(F.text == "📊 Statistika")
+async def stats(message: types.Message):
+    if message.from_user.id not in ADMINS: return
+    cursor.execute('SELECT COUNT(*) FROM users')
+    count = cursor.fetchone()[0]
+    await message.answer(f"👥 Foydalanuvchilar: {count}")
+
+@dp.message(F.text == "📢 Xabar yuborish")
+async def mailing_start(message: types.Message, state: FSMContext):
+    if message.from_user.id not in ADMINS: return
+    await message.answer("📝 Xabarni yozing:")
+    await state.set_state(Mailing.text)
+
+@dp.message(Mailing.text)
+async def mailing_process(message: types.Message, state: FSMContext):
+    cursor.execute('SELECT user_id FROM users')
+    users = cursor.fetchall()
+    for user in users:
+        try: await bot.send_message(user[0], message.text)
+        except: continue
+    await message.answer("✅ Yuborildi!", reply_markup=admin_kb)
+    await state.clear()
+
+@dp.message(F.text == "➕ Kino qo'shish")
+async def add_movie(message: types.Message, state: FSMContext):
+    if message.from_user.id not in ADMINS: return
+    await message.answer("📹 Videoni yuboring:")
+    await state.set_state(AddMovie.file_id)
+
+@dp.message(AddMovie.file_id, F.video | F.document)
 async def get_video(message: types.Message, state: FSMContext):
-    if message.from_user.id in ADMINS:
-        file_id = message.video.file_id if message.video else message.document.file_id
-        await state.update_data(file_id=file_id)
-        await message.answer("✅ Video qabul qilindi. Endi kodini yozing:")
-        await state.set_state(AddMovie.code)
+    file_id = message.video.file_id if message.video else message.document.file_id
+    await state.update_data(file_id=file_id)
+    await message.answer("🔢 Kodini yozing:")
+    await state.set_state(AddMovie.code)
 
 @dp.message(AddMovie.code)
 async def get_code(message: types.Message, state: FSMContext):
     data = await state.get_data()
     cursor.execute('INSERT OR REPLACE INTO movies (code, file_id) VALUES (?, ?)', (message.text, data['file_id']))
     conn.commit()
-    await message.answer(f"✅ Kino saqlandi! Kod: {message.text}")
+    await message.answer("✅ Saqlandi!", reply_markup=admin_kb)
     await state.clear()
 
-@dp.message(F.text)
-async def search_movie(message: types.Message):
-    if not await is_subscribed(message.from_user.id):
-        await message.answer("❌ Botdan foydalanish uchun kanalga obuna bo'ling!")
-        return
+@dp.message(F.text == "🗑 Kino o'chirish")
+async def del_movie(message: types.Message):
+    if message.from_user.id in ADMINS:
+        await message.answer("❌ O'chirmoqchi bo'lgan kodni yozing:")
+
+@dp.message(F.text.isdigit())
+async def search_or_del(message: types.Message):
+    if message.from_user.id in ADMINS and message.text.startswith("del"): 
+        # Дополнительная защита
+        pass
     
+    if not await is_subscribed(message.from_user.id):
+        await message.answer("⚠️ Obuna bo'ling!")
+        return
+        
     cursor.execute('SELECT file_id FROM movies WHERE code = ?', (message.text,))
     res = cursor.fetchone()
-    if res:
-        await bot.send_video(message.chat.id, res[0], caption=f"🎬 Kino: {message.text}")
-    else:
-        await message.answer("❌ Kino topilmadi.")
+    if res: await bot.send_video(message.chat.id, res[0], caption=f"🎬 Kod: {message.text}")
+    else: await message.answer("❌ Topilmadi.")
 
-async def handle(request): return web.Response(text="Bot is running")
 async def run_web():
     app = web.Application()
-    app.router.add_get('/', handle)
+    app.router.add_get('/', lambda r: web.Response(text="Bot is running"))
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, '0.0.0.0', int(os.environ.get('PORT', 8080)))
