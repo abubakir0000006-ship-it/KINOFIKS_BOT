@@ -7,19 +7,17 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 
 logging.basicConfig(level=logging.INFO)
 
-# Твой ТОКЕН и ID канала
 API_TOKEN = '8697886925:AAGJJwn-GfKWPGb4yoUzyA-ChTdURToQ1Ac'
-CHANNEL_ID = -1004399893412 # Теперь тут твой новый ID
+CHANNEL_ID = -1004399893412
 ADMINS = [8350819510]
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
 
-# Подключение БД
 conn = sqlite3.connect('movies.db', check_same_thread=False)
 cursor = conn.cursor()
 cursor.execute('CREATE TABLE IF NOT EXISTS movies (code TEXT PRIMARY KEY, file_id TEXT)')
@@ -29,19 +27,24 @@ class AddMovie(StatesGroup):
     file_id = State()
     code = State()
 
+# КЛАВИАТУРЫ
+admin_kb = ReplyKeyboardMarkup(keyboard=[
+    [KeyboardButton(text="➕ Kino qo'shish")],
+    [KeyboardButton(text="📊 Statistika")]
+], resize_keyboard=True)
+
 async def is_subscribed(user_id):
     try:
-        # Проверка статуса пользователя в канале
         member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
-        # Статусы, которые означают, что человек подписан
         return member.status in ['member', 'administrator', 'creator']
-    except Exception as e:
-        logging.error(f"Ошибка проверки подписки: {e}")
+    except:
         return False
 
 @dp.message(Command("start"))
 async def start(message: types.Message):
-    if not await is_subscribed(message.from_user.id):
+    if message.from_user.id in ADMINS:
+        await message.answer("👋 Xush kelibsiz, Admin!", reply_markup=admin_kb)
+    elif not await is_subscribed(message.from_user.id):
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="📢 Kanalga obuna bo'lish", url="https://t.me/+PpgAdF1iQ8xhODEy")],
             [InlineKeyboardButton(text="✅ Tekshirish", callback_data="check_sub")]
@@ -50,31 +53,28 @@ async def start(message: types.Message):
     else:
         await message.answer("🎬 Kino kodini yuboring va filmni tomosha qiling!")
 
-@dp.callback_query(F.data == "check_sub")
-async def check_sub(call: types.CallbackQuery):
-    if await is_subscribed(call.from_user.id):
-        await call.message.answer("✅ Rahmat! Obuna tasdiqlandi. Endi kino kodini yuboring.")
-    else:
-        await call.answer("❌ Siz hali kanalga obuna bo'lmagansiz!", show_alert=True)
-
-@dp.message(F.video)
-async def get_video(message: types.Message, state: FSMContext):
+@dp.message(F.text == "➕ Kino qo'shish")
+async def start_add(message: types.Message, state: FSMContext):
     if message.from_user.id in ADMINS:
-        await state.update_data(file_id=message.video.file_id)
-        await message.answer("✅ Video qabul qilindi. Endi kodini yozing:")
-        await state.set_state(AddMovie.code)
+        await message.answer("📹 Videoni yuboring:")
+        await state.set_state(AddMovie.file_id)
+
+@dp.message(AddMovie.file_id, F.video)
+async def get_video(message: types.Message, state: FSMContext):
+    await state.update_data(file_id=message.video.file_id)
+    await message.answer("✅ Video qabul qilindi. Endi kodini yozing:")
+    await state.set_state(AddMovie.code)
 
 @dp.message(AddMovie.code)
 async def get_code(message: types.Message, state: FSMContext):
     data = await state.get_data()
     cursor.execute('INSERT OR REPLACE INTO movies (code, file_id) VALUES (?, ?)', (message.text, data['file_id']))
     conn.commit()
-    await message.answer(f"✅ Kino saqlandi! Kod: {message.text}")
+    await message.answer(f"✅ Kino saqlandi! Kod: {message.text}", reply_markup=admin_kb)
     await state.clear()
 
 @dp.message(F.text)
 async def search_movie(message: types.Message):
-    # Проверка подписки перед выдачей фильма
     if not await is_subscribed(message.from_user.id):
         await message.answer("❌ Botdan foydalanish uchun kanalga obuna bo'ling!")
         return
@@ -86,7 +86,7 @@ async def search_movie(message: types.Message):
     else:
         await message.answer("❌ Kino topilmadi. Kodni tekshiring.")
 
-# UptimeRobot блок
+# Веб-сервер для UptimeRobot
 async def handle(request): return web.Response(text="Bot is running")
 async def run_web():
     app = web.Application()
