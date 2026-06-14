@@ -34,6 +34,7 @@ class DelMovie(StatesGroup):
 class Mailing(StatesGroup):
     text = State()
 
+# Добавил кнопки для удобства твоего админа
 admin_kb = ReplyKeyboardMarkup(keyboard=[
     [KeyboardButton(text="➕ Kino qo'shish"), KeyboardButton(text="🗑 Kino o'chirish")],
     [KeyboardButton(text="📊 Statistika"), KeyboardButton(text="📢 Xabar yuborish")]
@@ -44,11 +45,6 @@ async def is_subscribed(user_id):
         member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
         return member.status in ['member', 'administrator', 'creator']
     except: return False
-
-@dp.message(Command("cancel"))
-async def cancel_handler(message: types.Message, state: FSMContext):
-    await state.clear()
-    await message.answer("✅ Bekor qilindi.", reply_markup=admin_kb if message.from_user.id in ADMINS else None)
 
 @dp.message(Command("start"))
 async def start(message: types.Message):
@@ -61,9 +57,11 @@ async def start(message: types.Message):
             [InlineKeyboardButton(text="📢 Obuna bo'lish", url="https://t.me/+PpgAdF1iQ8xhODEy")],
             [InlineKeyboardButton(text="✅ Tekshirish", callback_data="check_sub")]
         ])
-        await message.answer("👋 Kino izlash uchun kanalga obuna bo'ling!", reply_markup=kb)
+        await message.answer("👋 Kino izlash uchun kanalga obuna bo'ling:", reply_markup=kb)
     else:
         await message.answer("🎬 Kino kodini yuboring:")
+
+# --- НОВЫЕ ФУНКЦИИ ДЛЯ АДМИНА ---
 
 @dp.message(F.text == "📊 Statistika")
 async def stats(message: types.Message):
@@ -94,12 +92,14 @@ async def mailing_process(message: types.Message, state: FSMContext):
 @dp.message(F.text == "➕ Kino qo'shish")
 async def add_movie(message: types.Message, state: FSMContext):
     if message.from_user.id not in ADMINS: return
-    await message.answer("📹 Videoni yuboring:")
+    await message.answer("📹 Videoni yuboring (yoki переслать qiling):")
     await state.set_state(AddMovie.file_id)
 
-@dp.message(AddMovie.file_id, F.video)
+@dp.message(AddMovie.file_id, F.video | F.document)
 async def get_video(message: types.Message, state: FSMContext):
-    await state.update_data(file_id=message.video.file_id)
+    # Теперь принимает и видео, и документы (если переслали)
+    file_id = message.video.file_id if message.video else message.document.file_id
+    await state.update_data(file_id=file_id)
     await message.answer("🔢 Kino kodini yozing:")
     await state.set_state(AddMovie.code)
 
@@ -108,7 +108,7 @@ async def get_code(message: types.Message, state: FSMContext):
     data = await state.get_data()
     cursor.execute('INSERT OR REPLACE INTO movies (code, file_id) VALUES (?, ?)', (message.text, data['file_id']))
     conn.commit()
-    await message.answer("✅ Kino qo'shildi!", reply_markup=admin_kb)
+    await message.answer("✅ Kino muvaffaqiyatli saqlandi!", reply_markup=admin_kb)
     await state.clear()
 
 @dp.message(F.text == "🗑 Kino o'chirish")
@@ -121,8 +121,10 @@ async def delete_movie_start(message: types.Message, state: FSMContext):
 async def delete_movie_process(message: types.Message, state: FSMContext):
     cursor.execute('DELETE FROM movies WHERE code = ?', (message.text,))
     conn.commit()
-    await message.answer("✅ Kino o'chirildi!", reply_markup=admin_kb)
+    await message.answer("✅ Kino bazadan o'chirildi!", reply_markup=admin_kb)
     await state.clear()
+
+# --- СТАРАЯ ЛОГИКА ---
 
 @dp.message(F.text)
 async def search_movie(message: types.Message):
@@ -133,7 +135,7 @@ async def search_movie(message: types.Message):
     cursor.execute('SELECT file_id FROM movies WHERE code = ?', (message.text,))
     res = cursor.fetchone()
     if res: 
-        await bot.send_video(message.chat.id, res[0], caption=f"🎬 Siz so'ragan kino: {message.text}")
+        await bot.send_video(message.chat.id, res[0], caption=f"🎬 Siz so'ragan kino kodi: {message.text}")
     else: 
         await message.answer("❌ Kino topilmadi. Kodni tekshiring.")
 
