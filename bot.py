@@ -20,13 +20,15 @@ dp = Dispatcher()
 
 conn = sqlite3.connect('movies.db', check_same_thread=False)
 cursor = conn.cursor()
-cursor.execute('CREATE TABLE IF NOT EXISTS movies (code TEXT PRIMARY KEY, file_id TEXT)')
+# Добавлена колонка description
+cursor.execute('CREATE TABLE IF NOT EXISTS movies (code TEXT PRIMARY KEY, file_id TEXT, description TEXT)')
 cursor.execute('CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY)')
 conn.commit()
 
 class AddMovie(StatesGroup):
     file_id = State()
     code = State()
+    description = State() # Новое состояние для описания
 
 class Mailing(StatesGroup):
     text = State()
@@ -106,8 +108,15 @@ async def get_video(message: types.Message, state: FSMContext):
 
 @dp.message(AddMovie.code)
 async def get_code(message: types.Message, state: FSMContext):
+    await state.update_data(code=message.text)
+    await message.answer("📝 Endi kinosining tavsifini (opisaniyasini) yozing:")
+    await state.set_state(AddMovie.description)
+
+@dp.message(AddMovie.description)
+async def get_description(message: types.Message, state: FSMContext):
     data = await state.get_data()
-    cursor.execute('INSERT OR REPLACE INTO movies (code, file_id) VALUES (?, ?)', (message.text, data['file_id']))
+    cursor.execute('INSERT OR REPLACE INTO movies (code, file_id, description) VALUES (?, ?, ?)', 
+                   (data['code'], data['file_id'], message.text))
     conn.commit()
     await message.answer("✅ Saqlandi!", reply_markup=admin_kb)
     await state.clear()
@@ -130,9 +139,9 @@ async def random_movie(message: types.Message):
     if not await is_subscribed(message.from_user.id):
         await message.answer("⚠️ Obuna bo'ling!")
         return
-    cursor.execute('SELECT code, file_id FROM movies ORDER BY RANDOM() LIMIT 1')
+    cursor.execute('SELECT code, file_id, description FROM movies ORDER BY RANDOM() LIMIT 1')
     res = cursor.fetchone()
-    if res: await bot.send_video(message.chat.id, res[1], caption=f"✨ Siz uchun tasodifiy kino: {res[0]}")
+    if res: await bot.send_video(message.chat.id, res[1], caption=f"✨ {res[2]}\n\n🎬 Kod: {res[0]}")
     else: await message.answer("❌ Bazada hali kino yo'q.")
 
 @dp.message(F.text)
@@ -140,9 +149,9 @@ async def search_movie(message: types.Message):
     if not await is_subscribed(message.from_user.id):
         await message.answer("⚠️ Obuna bo'ling!")
         return
-    cursor.execute('SELECT file_id FROM movies WHERE code = ?', (message.text,))
+    cursor.execute('SELECT file_id, description FROM movies WHERE code = ?', (message.text,))
     res = cursor.fetchone()
-    if res: await bot.send_video(message.chat.id, res[0], caption=f"🎬 Kod: {message.text}")
+    if res: await bot.send_video(message.chat.id, res[0], caption=f"{res[1]}\n\n🎬 Kod: {message.text}")
     else: await message.answer("❌ Topilmadi.")
 
 async def run_web():
