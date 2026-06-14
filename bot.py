@@ -41,33 +41,14 @@ admin_kb = ReplyKeyboardMarkup(keyboard=[
     [KeyboardButton(text="🔥 Tasodifiy kino")]
 ], resize_keyboard=True)
 
-async def is_subscribed(user_id):
-    try:
-        member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
-        return member.status in ['member', 'administrator', 'creator']
-    except: return False
-
 @dp.message(Command("start"))
 async def start(message: types.Message):
     cursor.execute('INSERT OR IGNORE INTO users (user_id) VALUES (?)', (message.from_user.id,))
     conn.commit()
     if message.from_user.id in ADMINS:
         await message.answer("👑 Admin panel:", reply_markup=admin_kb)
-    elif not await is_subscribed(message.from_user.id):
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📢 Obuna bo'lish", url="https://t.me/+PpgAdF1iQ8xhODEy")],
-            [InlineKeyboardButton(text="✅ Tekshirish", callback_data="check_sub")]
-        ])
-        await message.answer("👋 Kino ko'rish uchun kanalga obuna bo'ling!", reply_markup=kb)
     else:
         await message.answer("🎬 Kino kodini yuboring:")
-
-@dp.callback_query(F.data == "check_sub")
-async def check_sub(call: types.CallbackQuery):
-    if await is_subscribed(call.from_user.id):
-        await call.message.edit_text("✅ Rahmat! Kino kodini yuboring.")
-    else:
-        await call.answer("❌ Obuna bo'lmadingiz!", show_alert=True)
 
 @dp.message(F.text == "📊 Statistika")
 async def stats(message: types.Message):
@@ -135,9 +116,6 @@ async def delete_process(message: types.Message, state: FSMContext):
 
 @dp.message(F.text == "🔥 Tasodifiy kino")
 async def random_movie(message: types.Message):
-    if not await is_subscribed(message.from_user.id):
-        await message.answer("⚠️ Obuna bo'ling!")
-        return
     cursor.execute('SELECT code, file_id, description FROM movies ORDER BY RANDOM() LIMIT 1')
     res = cursor.fetchone()
     if res: await bot.send_video(message.chat.id, res[1], caption=f"✨ {res[2]}\n\n🎬 Kod: {res[0]}")
@@ -145,9 +123,6 @@ async def random_movie(message: types.Message):
 
 @dp.message(F.text)
 async def search_movie(message: types.Message):
-    if not await is_subscribed(message.from_user.id):
-        await message.answer("⚠️ Obuna bo'ling!")
-        return
     cursor.execute('SELECT file_id, description FROM movies WHERE code = ?', (message.text,))
     res = cursor.fetchone()
     if res: await bot.send_video(message.chat.id, res[0], caption=f"{res[1]}\n\n🎬 Kod: {message.text}")
