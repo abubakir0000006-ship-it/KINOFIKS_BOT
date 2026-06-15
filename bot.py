@@ -73,7 +73,7 @@ async def is_subscribed(user_id):
     except:
         return False
 
-# START
+# ========== START ==========
 @dp.message(Command("start"))
 async def start(message: types.Message):
     cursor.execute('INSERT OR IGNORE INTO users (user_id) VALUES (?)', (message.from_user.id,))
@@ -291,6 +291,7 @@ async def cancel_action(message: types.Message, state: FSMContext):
     kb = admin_kb if message.from_user.id in ADMINS else user_kb
     await message.answer("❌ Bekor qilindi.", reply_markup=kb)
 
+# ========== БЭКАП (исправлен) ==========
 @dp.message(Command("backup"))
 async def backup_db(message: types.Message):
     if message.from_user.id not in ADMINS:
@@ -302,10 +303,12 @@ async def backup_db(message: types.Message):
     except Exception as e:
         await message.answer(f"❌ Xato: {e}")
     finally:
+        import sqlite3 as sqlite3_module
         global conn, cursor
-        conn = sqlite3.connect('movies.db', check_same_thread=False)
+        conn = sqlite3_module.connect('movies.db', check_same_thread=False)
         cursor = conn.cursor()
 
+# ========== СЕРИАЛЫ (админ) ==========
 @dp.message(F.text == "🎬 Serial qo'shish")
 async def add_series_start(message: types.Message, state: FSMContext):
     if message.from_user.id not in ADMINS:
@@ -355,6 +358,7 @@ async def del_series_start(message: types.Message, state: FSMContext):
     await message.answer("❌ Serial kodini yozing:")
     await state.set_state(DelMovie.code)
 
+# ========== ПОИСК (фильмы и сериалы) ==========
 @dp.message(F.text)
 async def search_movie(message: types.Message):
     if not await is_subscribed(message.from_user.id):
@@ -405,6 +409,7 @@ async def search_movie(message: types.Message):
     else:
         await message.answer("❌ Topilmadi.")
 
+# ========== НАВИГАЦИЯ ПО СЕРИАЛАМ ==========
 @dp.callback_query(F.data.startswith("series_"))
 async def series_navigate(call: types.CallbackQuery):
     parts = call.data.split("_")
@@ -461,7 +466,7 @@ async def series_navigate(call: types.CallbackQuery):
     await call.message.edit_caption(caption=f"🎬 {code}\n🔸 {new_series}/{max_series} seriya\n{s_res[1] if s_res[1] else ''}", reply_markup=full_kb)
     await call.answer()
 
-# Запуск
+# ========== ЗАПУСК ==========
 async def run_web():
     app = web.Application()
     app.router.add_get('/', lambda r: web.Response(text="Bot is running"))
