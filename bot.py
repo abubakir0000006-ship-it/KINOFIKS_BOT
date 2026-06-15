@@ -287,8 +287,10 @@ async def cancel_action(message: types.Message, state: FSMContext):
     kb = admin_kb if message.from_user.id in ADMINS else user_kb
     await message.answer("❌ Bekor qilindi.", reply_markup=kb)
 
+# ========== ИСПРАВЛЕННЫЙ БЭКАП ==========
 @dp.message(Command("backup"))
 async def backup_db(message: types.Message):
+    global conn, cursor   # <-- ЭТО ДОЛЖНО БЫТЬ ПЕРВОЙ СТРОКОЙ В ФУНКЦИИ
     if message.from_user.id not in ADMINS:
         return
     await message.answer("⏳ Bazani yuklayapman...")
