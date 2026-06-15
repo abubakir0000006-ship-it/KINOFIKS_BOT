@@ -7,7 +7,7 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton, FSInputFile
 
 logging.basicConfig(level=logging.INFO)
 
@@ -72,7 +72,7 @@ class AddSeries(StatesGroup):
     description = State()
     another = State()
 
-# ========== НОВЫЕ КЛАВИАТУРЫ ==========
+# ========== КЛАВИАТУРЫ ==========
 admin_kb = ReplyKeyboardMarkup(keyboard=[
     [KeyboardButton(text="➕ Kino qo'shish"), KeyboardButton(text="🗑 Kino o'chirish")],
     [KeyboardButton(text="🎬 Serial qo'shish"), KeyboardButton(text="🗑 Serial o'chirish")],
@@ -97,7 +97,7 @@ async def is_subscribed(user_id):
         logging.error(f"Ошибка проверки подписки: {e}")
         return False
 
-# ========== СТАРЫЕ ХЕНДЛЕРЫ (без изменений) ==========
+# ========== СТАРЫЕ ХЕНДЛЕРЫ ==========
 @dp.message(Command("start"))
 async def start(message: types.Message):
     cursor.execute('INSERT OR IGNORE INTO users (user_id) VALUES (?)', (message.from_user.id,))
@@ -256,7 +256,6 @@ async def search_movie(message: types.Message):
     
     code = message.text.strip()
     
-    # Проверяем обычный фильм
     cursor.execute('SELECT code, file_id, description, likes, dislikes FROM movies WHERE code = ?', (code,))
     res = cursor.fetchone()
     
@@ -271,17 +270,14 @@ async def search_movie(message: types.Message):
         await bot.send_video(message.chat.id, res[1], caption=f"{res[2]}\n\n🎬 Kod: {message.text}", reply_markup=kb)
         return
     
-    # Проверяем сериал
     cursor.execute('SELECT COUNT(*) FROM series WHERE code = ?', (code,))
     series_count = cursor.fetchone()[0]
     
     if series_count > 0:
-        # Получаем прогресс пользователя
         cursor.execute('SELECT last_series FROM series_progress WHERE user_id = ? AND series_code = ?', (message.from_user.id, code))
         prog = cursor.fetchone()
         current_series = prog[0] if prog else 1
         
-        # Получаем данные текущей серии
         cursor.execute('SELECT file_id, description FROM series WHERE code = ? AND series_number = ?', (code, current_series))
         s_res = cursor.fetchone()
         
@@ -289,18 +285,15 @@ async def search_movie(message: types.Message):
             cursor.execute('INSERT INTO user_history (user_id, film_code) VALUES (?, ?)', (message.from_user.id, f"{code}#{current_series}"))
             cursor.execute('UPDATE users SET viewed_count = viewed_count + 1 WHERE user_id = ?', (message.from_user.id,))
             
-            # Получаем общее количество серий
             cursor.execute('SELECT MAX(series_number) FROM series WHERE code = ?', (code,))
             max_series = cursor.fetchone()[0]
             
-            # Кнопки навигации
             nav_kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="◀️ Oldingi", callback_data=f"series_{code}_prev"),
                  InlineKeyboardButton(text="Keyingi ▶️", callback_data=f"series_{code}_next")],
                 [InlineKeyboardButton(text="📋 Seriyalar ro'yxati", callback_data=f"series_{code}_list")]
             ])
             
-            # Получаем лайки/дизлайки для сериала (если есть в movies)
             cursor.execute('SELECT likes, dislikes FROM movies WHERE code = ?', (code,))
             movie_likes = cursor.fetchone()
             
@@ -310,7 +303,6 @@ async def search_movie(message: types.Message):
                 [InlineKeyboardButton(text="⚠️ Shikoyat", callback_data=f"report_{code}")]
             ])
             
-            # Объединяем клавиатуры
             full_kb = InlineKeyboardMarkup(inline_keyboard=nav_kb.inline_keyboard + like_kb.inline_keyboard)
             
             caption = f"🎬 Serial: {code}\n🔸 {current_series}/{max_series} seriya"
@@ -325,8 +317,6 @@ async def search_movie(message: types.Message):
         await message.answer("❌ Topilmadi.")
 
 # ========== НОВЫЕ ХЕНДЛЕРЫ ==========
-
-# Отмена действия
 @dp.message(Command("cancel"))
 @dp.message(F.text == "❌ Bekor qilish")
 async def cancel_action(message: types.Message, state: FSMContext):
@@ -336,7 +326,6 @@ async def cancel_action(message: types.Message, state: FSMContext):
     else:
         await message.answer("❌ Amal bekor qilindi.", reply_markup=user_kb)
 
-# История просмотров
 @dp.message(F.text == "📜 Tarix")
 async def show_history(message: types.Message):
     cursor.execute('''
@@ -352,7 +341,6 @@ async def show_history(message: types.Message):
         text += f"{i}. 🎬 Kod: `{code}` — {dt[:16]}\n"
     await message.answer(text, parse_mode="Markdown")
 
-# Избранное
 @dp.message(Command("addfav"))
 async def add_favorite(message: types.Message):
     parts = message.text.split()
@@ -390,7 +378,6 @@ async def list_favorites(message: types.Message):
     codes = [row[0] for row in rows]
     await message.answer(f"❤️ Sizning izlangan kinolaringiz:\n\n{', '.join(codes)}")
 
-# Детальная статистика для админа
 @dp.message(F.text == "📊 Detallar")
 async def detailed_stats(message: types.Message):
     if message.from_user.id not in ADMINS:
@@ -422,7 +409,7 @@ async def detailed_stats(message: types.Message):
         parse_mode="Markdown"
     )
 
-# Бэкап базы данных
+# ИСПРАВЛЕННЫЙ БЭКАП (работает на Render)
 @dp.message(Command("backup"))
 async def backup_db(message: types.Message):
     if message.from_user.id not in ADMINS:
@@ -431,8 +418,7 @@ async def backup_db(message: types.Message):
     await message.answer("⏳ Bazani tayyorlayapman...")
     conn.close()
     try:
-        with open('movies.db', 'rb') as f:
-            await bot.send_document(message.chat.id, types.BufferedInputFile(f.read(), filename='movies_backup.db'))
+        await bot.send_document(message.chat.id, FSInputFile('movies.db', filename='movies_backup.db'))
     except Exception as e:
         await message.answer(f"❌ Xatolik: {e}")
     finally:
@@ -466,7 +452,6 @@ async def add_series_get_desc(message: types.Message, state: FSMContext):
     data = await state.get_data()
     desc = message.text if message.text != "-" else ""
     
-    # Получаем следующий номер серии
     cursor.execute('SELECT MAX(series_number) FROM series WHERE code = ?', (data['code'],))
     max_num = cursor.fetchone()[0] or 0
     series_num = max_num + 1
@@ -474,7 +459,6 @@ async def add_series_get_desc(message: types.Message, state: FSMContext):
     cursor.execute('INSERT INTO series (code, series_number, file_id, description) VALUES (?, ?, ?, ?)',
                    (data['code'], series_num, data['file_id'], desc))
     
-    # Создаём запись в movies для лайков (если ещё нет)
     cursor.execute('INSERT OR IGNORE INTO movies (code, file_id, description, likes, dislikes) VALUES (?, ?, ?, 0, 0)',
                    (data['code'], data['file_id'], f"Serial: {data['code']}"))
     
@@ -517,12 +501,10 @@ async def series_navigate(call: types.CallbackQuery):
     action = parts[2]
     user_id = call.from_user.id
     
-    # Получаем текущую серию из прогресса
     cursor.execute('SELECT last_series FROM series_progress WHERE user_id = ? AND series_code = ?', (user_id, code))
     prog = cursor.fetchone()
     current = prog[0] if prog else 1
     
-    # Получаем общее количество серий
     cursor.execute('SELECT MAX(series_number) FROM series WHERE code = ?', (code,))
     max_series = cursor.fetchone()[0] or 1
     
@@ -546,12 +528,10 @@ async def series_navigate(call: types.CallbackQuery):
         await call.answer()
         return
     
-    # Обновляем прогресс
     cursor.execute('INSERT OR REPLACE INTO series_progress (user_id, series_code, last_series) VALUES (?, ?, ?)',
                    (user_id, code, new_series))
     conn.commit()
     
-    # Получаем данные новой серии
     cursor.execute('SELECT file_id, description FROM series WHERE code = ? AND series_number = ?', (code, new_series))
     s_res = cursor.fetchone()
     
@@ -559,14 +539,12 @@ async def series_navigate(call: types.CallbackQuery):
         await call.answer("Seriya topilmadi", show_alert=True)
         return
     
-    # Кнопки навигации
     nav_kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="◀️ Oldingi", callback_data=f"series_{code}_prev"),
          InlineKeyboardButton(text="Keyingi ▶️", callback_data=f"series_{code}_next")],
         [InlineKeyboardButton(text="📋 Seriyalar ro'yxati", callback_data=f"series_{code}_list")]
     ])
     
-    # Лайки/дизлайки
     cursor.execute('SELECT likes, dislikes FROM movies WHERE code = ?', (code,))
     movie_likes = cursor.fetchone()
     
