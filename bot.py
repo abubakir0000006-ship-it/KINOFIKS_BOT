@@ -20,23 +20,24 @@ ADMINS = [8925518277, 8350819510]
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
 
-# Инициализация БД (фильмы + СЕРИАЛЫ)
 conn = sqlite3.connect('movies.db', check_same_thread=False)
 cursor = conn.cursor()
 cursor.execute('CREATE TABLE IF NOT EXISTS movies (code TEXT PRIMARY KEY, file_id TEXT, description TEXT, likes INTEGER DEFAULT 0, dislikes INTEGER DEFAULT 0)')
 cursor.execute('CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, viewed_count INTEGER DEFAULT 0)')
-# Новые таблицы для сериалов
-cursor.execute('CREATE TABLE IF NOT EXISTS serials (code TEXT PRIMARY KEY, title TEXT)')
-cursor.execute('CREATE TABLE IF NOT EXISTS episodes (code TEXT, ep_num INTEGER, file_id TEXT)')
 conn.commit()
 
 class AddMovie(StatesGroup):
-    file_id = State(); code = State(); description = State()
+    file_id = State()
+    code = State()
+    description = State()
+
 class Mailing(StatesGroup):
     text = State()
+
 class DelMovie(StatesGroup):
     code = State()
 
+# Клавиатуры
 admin_kb = ReplyKeyboardMarkup(keyboard=[
     [KeyboardButton(text="➕ Kino qo'shish"), KeyboardButton(text="🗑 Kino o'chirish")],
     [KeyboardButton(text="📊 Statistika"), KeyboardButton(text="📢 Xabar yuborish")],
@@ -77,21 +78,8 @@ async def check_sub(call: types.CallbackQuery):
     if await is_subscribed(call.from_user.id):
         await call.message.edit_text("✅ Rahmat! Kino kodini yuboring.", reply_markup=user_kb)
     else:
-        await call.answer("❌ Obuna bo'lmadingiz!", show_alert=True)
+        await call.answer("❌ Obuna bo'lmadingiz! Kanalga kiring.", show_alert=True)
 
-# --- НОВАЯ ЛОГИКА ДЛЯ СЕРИАЛОВ ---
-@dp.callback_query(F.data.startswith("ep_"))
-async def handle_episode(call: types.CallbackQuery):
-    _, code, ep_num = call.data.split("_")
-    cursor.execute('SELECT file_id FROM episodes WHERE code = ? AND ep_num = ?', (code, ep_num))
-    res = cursor.fetchone()
-    if res:
-        await bot.send_video(call.message.chat.id, res[0], caption=f"🎬 Serial: {code} | Qism: {ep_num}")
-    else:
-        await call.answer("❌ Qism topilmadi")
-    await call.answer()
-
-# --- СТАРАЯ ЛОГИКА (НЕ ТРОГАЛ) ---
 @dp.callback_query(F.data.startswith("like_"))
 async def handle_like(call: types.CallbackQuery):
     code = call.data.split("_")[1]
@@ -206,26 +194,11 @@ async def random_movie(message: types.Message):
         await bot.send_video(message.chat.id, res[1], caption=f"✨ {res[2]}\n\n🎬 Kod: {res[0]}", reply_markup=kb)
     else: await message.answer("❌ Bazada hali kino yo'q.")
 
-# --- МОДЕРНИЗИРОВАННЫЙ ПОИСК (ИЩЕТ СЕРИАЛЫ, А ПОТОМ ФИЛЬМЫ) ---
 @dp.message(F.text)
 async def search_movie(message: types.Message):
     if not await is_subscribed(message.from_user.id):
         await message.answer("⚠️ Obuna bo'ling!")
         return
-    
-    # 1. Поиск сериала
-    cursor.execute('SELECT title FROM serials WHERE code = ?', (message.text,))
-    ser = cursor.fetchone()
-    if ser:
-        cursor.execute('SELECT ep_num FROM episodes WHERE code = ? ORDER BY ep_num ASC', (message.text,))
-        eps = cursor.fetchall()
-        kb_ep = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=f"Qism {e[0]}", callback_data=f"ep_{message.text}_{e[0]}")] for e in eps
-        ])
-        await message.answer(f"🎬 Serial: {ser[0]}\nQismni tanlang:", reply_markup=kb_ep)
-        return
-
-    # 2. Поиск фильма (твой старый код)
     cursor.execute('SELECT code, file_id, description, likes, dislikes FROM movies WHERE code = ?', (message.text,))
     res = cursor.fetchone()
     if res:
