@@ -105,13 +105,16 @@ class SearchMovie(StatesGroup):
 # КЛАВИАТУРЫ (старые + новые кнопки)
 # ============================================================
 GENRES = {
-    "action": "💥 Боевик",
-    "comedy": "😂 Комедия",
-    "drama": "🎭 Драма",
-    "horror": "👻 Ужасы",
-    "cartoon": "🎠 Мультфильм",
-    "series": "📺 Сериал",
-    "other": "🎬 Другое"
+    "action": "💥 Jangari",
+    "comedy": "😂 Komediya",
+    "drama": "🎭 Drama",
+    "horror": "👻 Qo'rqinchli",
+    "love": "❤️ Sevgi",
+    "thriller": "🔪 Triller",
+    "fantasy": "🪄 Fantastika",
+    "cartoon": "🎠 Multfilm",
+    "series": "📺 Serial",
+    "other": "🎬 Boshqa"
 }
  
 admin_kb = ReplyKeyboardMarkup(keyboard=[
@@ -184,6 +187,18 @@ def add_to_history(user_id, code):
                       (user_id, code, datetime.now().strftime("%Y-%m-%d %H:%M")))
         conn.commit()
     except: pass
+ 
+def genres_display(genre_field, emoji_only=False):
+    """НОВОЕ: жанры теперь хранятся через запятую — эта функция красиво их отображает.
+    emoji_only=True вернёт только первый emoji (для коротких списков в одну строку)."""
+    if not genre_field:
+        return "🎬" if emoji_only else "🎬 Boshqa"
+    parts = [g for g in genre_field.split(",") if g]
+    if not parts:
+        return "🎬" if emoji_only else "🎬 Boshqa"
+    if emoji_only:
+        return GENRES.get(parts[0], "🎬").split(" ")[0]
+    return ", ".join([GENRES.get(p, p) for p in parts])
  
 # НОВОЕ: пересылаем видео в архивный канал и возвращаем "вечный" file_id оттуда.
 # Это решает проблему "бот хранит фильм недолго, потом видео пропадает" —
@@ -357,7 +372,7 @@ async def new_movies(message: types.Message):
     text = "🆕 Yangi qo'shilgan kinolar:\n\n"
     for m in movies:
         desc = (m[1][:40] + "...") if len(m[1]) > 40 else m[1]
-        genre_emoji = GENRES.get(m[2], "🎬") if m[2] else "🎬"
+        genre_emoji = genres_display(m[2], emoji_only=True)
         text += f"{genre_emoji} Kod: {m[0]} — {desc}\n"
     text += "\nKino kodini yuborib ko'ring!"
     await message.answer(text)
@@ -461,25 +476,55 @@ async def get_code_new(message: types.Message, state: FSMContext):
     await message.answer("📝 Kinosining tavsifini yozing:")
     await state.set_state(AddMovieNew.description)
  
+def build_genre_select_kb(selected_genres):
+    """НОВОЕ: клавиатура мультивыбора жанров — отмеченные жанры показываются с галочкой ✅"""
+    rows = []
+    for k, v in GENRES.items():
+        text = f"✅ {v}" if k in selected_genres else v
+        rows.append([InlineKeyboardButton(text=text, callback_data=f"togglegenre|{k}")])
+    rows.append([InlineKeyboardButton(text="✔️ Tayyor", callback_data="genredone")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+ 
 @dp.message(AddMovieNew.description)
 async def get_description_new(message: types.Message, state: FSMContext):
-    await state.update_data(description=message.text)
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=v, callback_data=f"setgenre|{k}")] for k, v in GENRES.items()
-    ])
-    await message.answer("🎭 Janrni tanlang:", reply_markup=kb)
+    await state.update_data(description=message.text, selected_genres=[])
+    await message.answer(
+        "🎭 Janrlarni tanlang (bir nechtasini tanlash mumkin), so'ng \"✔️ Tayyor\" tugmasini bosing:",
+        reply_markup=build_genre_select_kb([])
+    )
     await state.set_state(AddMovieNew.genre)
  
-@dp.callback_query(F.data.startswith("setgenre|"))
-async def set_genre(call: types.CallbackQuery, state: FSMContext):
+@dp.callback_query(F.data.startswith("togglegenre|"), AddMovieNew.genre)
+async def toggle_genre(call: types.CallbackQuery, state: FSMContext):
     genre = call.data.split("|")[1]
     data = await state.get_data()
+    selected = data.get('selected_genres', [])
+    if genre in selected:
+        selected.remove(genre)
+    else:
+        selected.append(genre)
+    await state.update_data(selected_genres=selected)
+    try:
+        await call.message.edit_reply_markup(reply_markup=build_genre_select_kb(selected))
+    except: pass
+    await call.answer()
+ 
+@dp.callback_query(F.data == "genredone", AddMovieNew.genre)
+async def set_genre(call: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    selected = data.get('selected_genres', [])
+    if not selected:
+        await call.answer("⚠️ Kamida 1 ta janr tanlang!", show_alert=True)
+        return
+    # НОВОЕ: храним несколько жанров через запятую, например "love,horror,thriller"
+    genre_str = ",".join(selected)
     # НОВОЕ: дублируем видео в архивный канал, чтобы оно хранилось вечно
     archived_file_id = await archive_video(data['file_id'], caption=f"🎬 Kod: {data['code']}")
     cursor.execute('INSERT OR REPLACE INTO movies (code, file_id, description, genre) VALUES (?, ?, ?, ?)',
-                  (data['code'], archived_file_id, data['description'], genre))
+                  (data['code'], archived_file_id, data['description'], genre_str))
     conn.commit()
-    await call.message.edit_text(f"✅ Kino saqlandi! Janr: {GENRES.get(genre)}")
+    genre_names = ", ".join([GENRES.get(g, g) for g in selected])
+    await call.message.edit_text(f"✅ Kino saqlandi! Janrlar: {genre_names}")
     await bot.send_message(call.from_user.id, "👑 Admin panel:", reply_markup=admin_kb)
     await state.clear()
  
@@ -638,7 +683,7 @@ async def all_movies(message: types.Message):
         return
     text = f"📋 Jami {len(movies)} ta kino:\n\n"
     for m in movies:
-        genre_emoji = GENRES.get(m[1], "🎬")
+        genre_emoji = genres_display(m[1], emoji_only=True)
         text += f"{genre_emoji} {m[0]} | 👁{m[2]} | 👍{m[3]}\n"
     await message.answer(text[:4000])
  
@@ -693,7 +738,12 @@ async def genres_menu(message: types.Message):
 @dp.callback_query(F.data.startswith("genre|"))
 async def genre_list(call: types.CallbackQuery):
     genre = call.data.split("|")[1]
-    cursor.execute('SELECT code, description FROM movies WHERE genre=? ORDER BY likes DESC LIMIT 10', (genre,))
+    # НОВОЕ: жанры хранятся через запятую (например "love,horror"). Чтобы "love" не зацепил
+    # случайно похожий жанр, оборачиваем поле и искомое значение запятыми с двух сторон.
+    cursor.execute(
+        "SELECT code, description FROM movies WHERE (',' || genre || ',') LIKE ? ORDER BY likes DESC LIMIT 10",
+        (f'%,{genre},%',)
+    )
     movies = cursor.fetchall()
     genre_name = GENRES.get(genre, "🎬")
     if not movies:
@@ -732,7 +782,7 @@ async def search_process(message: types.Message, state: FSMContext):
     text = f"🔍 '{query}' bo'yicha natijalar:\n\n"
     for r in results:
         desc = (r[1][:50] + "...") if len(r[1]) > 50 else r[1]
-        genre_emoji = GENRES.get(r[2], "🎬")
+        genre_emoji = genres_display(r[2], emoji_only=True)
         text += f"{genre_emoji} Kod: {r[0]}\n{desc}\n\n"
     text += "Kino kodini yuboring!"
     await message.answer(text)
@@ -797,16 +847,24 @@ async def similar_movies(call: types.CallbackQuery):
     if not res or not res[0]:
         await call.answer("❌ Ma'lumot yo'q", show_alert=True)
         return
-    genre = res[0]
-    cursor.execute(
-        'SELECT code, description FROM movies WHERE genre=? AND code!=? ORDER BY likes DESC LIMIT 5',
-        (genre, code)
-    )
-    similar = cursor.fetchall()
+    movie_genres = [g for g in res[0].split(",") if g]
+    if not movie_genres:
+        await call.answer("❌ Ma'lumot yo'q", show_alert=True)
+        return
+    # НОВОЕ: ищем фильмы у которых есть хотя бы ОДИН общий жанр с этим фильмом
+    cursor.execute('SELECT code, description, genre FROM movies WHERE code != ?', (code,))
+    all_movies = cursor.fetchall()
+    similar = []
+    for m in all_movies:
+        other_genres = [g for g in (m[2] or "").split(",") if g]
+        if set(movie_genres) & set(other_genres):
+            similar.append(m)
+    similar = similar[:5]
     if not similar:
         await call.answer("❌ O'xshash kinolar topilmadi", show_alert=True)
         return
-    text = f"📺 {GENRES.get(genre, 'Shunga o\'xshash')} janridagi kinolar:\n\n"
+    genre_names = genres_display(res[0])
+    text = f"📺 {genre_names} janridagi o'xshash kinolar:\n\n"
     for s in similar:
         desc = (s[1][:40] + "...") if len(s[1]) > 40 else s[1]
         text += f"🎬 Kod: {s[0]} — {desc}\n"
