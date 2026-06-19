@@ -69,6 +69,15 @@ cursor.execute('''CREATE TABLE IF NOT EXISTS series_subscribers (
 )''')
 conn.commit()
  
+# НОВОЕ: подборки от редакции ("Топ недели" и т.п.)
+cursor.execute('''CREATE TABLE IF NOT EXISTS collections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT,
+    codes TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)''')
+conn.commit()
+ 
 # ============================================================
 # СТАРЫЕ СОСТОЯНИЯ (не трогаем)
 # ============================================================
@@ -101,6 +110,14 @@ class AddMovieNew(StatesGroup):
 class SearchMovie(StatesGroup):
     query = State()
  
+class CreateCollection(StatesGroup):
+    title = State()
+    codes = State()
+ 
+class Quiz(StatesGroup):
+    mood = State()
+    time = State()
+ 
 # ============================================================
 # КЛАВИАТУРЫ (старые + новые кнопки)
 # ============================================================
@@ -123,14 +140,19 @@ admin_kb = ReplyKeyboardMarkup(keyboard=[
     [KeyboardButton(text="📊 Statistika"), KeyboardButton(text="📢 Xabar yuborish")],
     [KeyboardButton(text="🔥 Tasodifiy kino"), KeyboardButton(text="⭐ TOP 10")],
     [KeyboardButton(text="🆕 Yangi kinolar"), KeyboardButton(text="📁 Saqlanganlar")],
-    [KeyboardButton(text="👤 Profil"), KeyboardButton(text="🔍 Qidirish")]
+    [KeyboardButton(text="👤 Profil"), KeyboardButton(text="🔍 Qidirish")],
+    # НОВОЕ
+    [KeyboardButton(text="🗂 Tanlov yaratish"), KeyboardButton(text="🎯 Nima ko'raman?")],
+    [KeyboardButton(text="💾 Bazani yuklab olish")]
 ], resize_keyboard=True)
  
 user_kb = ReplyKeyboardMarkup(keyboard=[
     [KeyboardButton(text="🔥 Tasodifiy kino"), KeyboardButton(text="⭐ TOP 10")],
     [KeyboardButton(text="🆕 Yangi kinolar"), KeyboardButton(text="📁 Saqlanganlar")],
     [KeyboardButton(text="🎭 Janrlar"), KeyboardButton(text="🔍 Qidirish")],
-    [KeyboardButton(text="📜 Tarix"), KeyboardButton(text="👤 Profil")]
+    [KeyboardButton(text="📜 Tarix"), KeyboardButton(text="👤 Profil")],
+    # НОВОЕ
+    [KeyboardButton(text="🗂 Tanlovlar"), KeyboardButton(text="🎯 Nima ko'raman?")]
 ], resize_keyboard=True)
  
 # ============================================================
@@ -625,10 +647,170 @@ async def random_movie(message: types.Message):
     else:
         await message.answer("❌ Bazada hali kino yo'q.")
  
+# ============================================================
+# НОВОЕ: 1) РЕЗЕРВНАЯ КОПИЯ БАЗЫ ДЛЯ АДМИНА
+# ============================================================
+from aiogram.types import FSInputFile
+ 
+@dp.message(F.text == "💾 Bazani yuklab olish")
+async def admin_backup(message: types.Message):
+    if message.from_user.id not in ADMINS:
+        return
+    try:
+        conn.commit()  # на всякий случай сохраняем все изменения перед копией
+        await message.answer_document(
+            FSInputFile('movies.db'),
+            caption=f"💾 Zaxira nusxa | {datetime.now().strftime('%d.%m.%Y %H:%M')}"
+        )
+    except Exception as e:
+        await message.answer(f"❌ Xatolik: {e}")
+ 
+async def daily_auto_backup():
+    """НОВОЕ: раз в сутки бот сам отправляет всем админам бэкап базы данных."""
+    while True:
+        await asyncio.sleep(86400)  # 24 часа
+        try:
+            conn.commit()
+            for admin_id in ADMINS:
+                try:
+                    await bot.send_document(
+                        admin_id,
+                        FSInputFile('movies.db'),
+                        caption=f"💾 Avtomatik zaxira nusxa | {datetime.now().strftime('%d.%m.%Y %H:%M')}"
+                    )
+                except: pass
+        except Exception as e:
+            logging.error(f"Avto-zaxiralashda xatolik: {e}")
+ 
+# ============================================================
+# НОВОЕ: 2) ПОДБОРКИ ОТ РЕДАКЦИИ ("Топ недели" и т.п.)
+# ============================================================
+@dp.message(F.text == "🗂 Tanlov yaratish")
+async def create_collection_start(message: types.Message, state: FSMContext):
+    if message.from_user.id not in ADMINS:
+        return
+    await message.answer("📝 Tanlov nomini yozing (masalan: \"🔥 Hafta TOP-5\"):")
+    await state.set_state(CreateCollection.title)
+ 
+@dp.message(CreateCollection.title)
+async def create_collection_title(message: types.Message, state: FSMContext):
+    await state.update_data(title=message.text.strip())
+    await message.answer(
+        "🎬 Endi shu tanlovga kiritiladigan kino kodlarini yozing, vergul bilan ajratib.\n\n"
+        "Masalan: AB123, CD456, EF789"
+    )
+    await state.set_state(CreateCollection.codes)
+ 
+@dp.message(CreateCollection.codes)
+async def create_collection_codes(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    codes = [c.strip() for c in message.text.split(",") if c.strip()]
+    if not codes:
+        await message.answer("❌ Hech qanday kod kiritilmadi. Qaytadan urinib ko'ring.")
+        return
+ 
+    # Проверяем что коды существуют в базе
+    valid_codes = []
+    for code in codes:
+        cursor.execute('SELECT code FROM movies WHERE code=?', (code,))
+        if cursor.fetchone():
+            valid_codes.append(code)
+ 
+    if not valid_codes:
+        await message.answer("❌ Hech biri topilmadi. Kodlarni tekshirib qaytadan kiriting.")
+        return
+ 
+    codes_str = ",".join(valid_codes)
+    cursor.execute('INSERT INTO collections (title, codes) VALUES (?, ?)', (data['title'], codes_str))
+    conn.commit()
+    await message.answer(
+        f"✅ Tanlov yaratildi!\n\n🗂 {data['title']}\n🎬 {len(valid_codes)} ta kino qo'shildi.",
+        reply_markup=admin_kb
+    )
+    await state.clear()
+ 
+@dp.message(F.text == "🗂 Tanlovlar")
+async def list_collections(message: types.Message):
+    cursor.execute('SELECT id, title FROM collections ORDER BY created_at DESC LIMIT 15')
+    collections = cursor.fetchall()
+    if not collections:
+        await message.answer("❌ Hozircha tanlovlar yo'q.")
+        return
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=c[1], callback_data=f"showcol|{c[0]}")] for c in collections
+    ])
+    await message.answer("🗂 Mavjud tanlovlar:", reply_markup=kb)
+ 
+@dp.callback_query(F.data.startswith("showcol|"))
+async def show_collection(call: types.CallbackQuery):
+    col_id = int(call.data.split("|")[1])
+    cursor.execute('SELECT title, codes FROM collections WHERE id=?', (col_id,))
+    res = cursor.fetchone()
+    if not res:
+        await call.answer("❌ Topilmadi", show_alert=True)
+        return
+    title, codes_str = res
+    codes = [c for c in codes_str.split(",") if c]
+    text = f"🗂 {title}\n\n"
+    for code in codes:
+        cursor.execute('SELECT description FROM movies WHERE code=?', (code,))
+        m = cursor.fetchone()
+        desc = (m[0][:40] + "...") if m and len(m[0]) > 40 else (m[0] if m else "")
+        text += f"🎬 Kod: {code} — {desc}\n"
+    text += "\nKodini yuboring!"
+    await call.message.answer(text)
+    await call.answer()
+ 
+# ============================================================
+# НОВОЕ: 3) МИНИ-ОПРОС "ЧТО ПОСМОТРЕТЬ?"
+# ============================================================
+@dp.message(F.text == "🎯 Nima ko'raman?")
+async def quiz_start(message: types.Message, state: FSMContext):
+    if not await is_subscribed(message.from_user.id) and message.from_user.id not in ADMINS:
+        await message.answer("⚠️ Obuna bo'ling!")
+        return
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="😂 Kulgili narsa", callback_data="quizmood|comedy")],
+        [InlineKeyboardButton(text="😱 Qo'rqinchli narsa", callback_data="quizmood|horror")],
+        [InlineKeyboardButton(text="❤️ Romantik narsa", callback_data="quizmood|love")],
+        [InlineKeyboardButton(text="💥 Action/qiziqarli", callback_data="quizmood|action")],
+        [InlineKeyboardButton(text="🎲 Farqi yo'q, ajablantir", callback_data="quizmood|any")]
+    ])
+    await message.answer("🎯 Kayfiyatingiz qanday? Nima ko'rishni xohlaysiz?", reply_markup=kb)
+ 
+@dp.callback_query(F.data.startswith("quizmood|"))
+async def quiz_mood(call: types.CallbackQuery):
+    mood = call.data.split("|")[1]
+    if mood == "any":
+        cursor.execute('SELECT code, description, file_id, likes, dislikes FROM movies ORDER BY RANDOM() LIMIT 1')
+    else:
+        cursor.execute(
+            "SELECT code, description, file_id, likes, dislikes FROM movies WHERE (',' || genre || ',') LIKE ? ORDER BY RANDOM() LIMIT 1",
+            (f'%,{mood},%',)
+        )
+    res = cursor.fetchone()
+    if not res:
+        await call.answer("❌ Bu kayfiyat uchun kino topilmadi, boshqasini tanlang!", show_alert=True)
+        return
+    code, description, file_id, likes, dislikes = res
+    user_id = call.from_user.id
+    cursor.execute('UPDATE users SET viewed_count = viewed_count + 1 WHERE user_id = ?', (user_id,))
+    cursor.execute('UPDATE movies SET view_count = view_count + 1 WHERE code = ?', (code,))
+    conn.commit()
+    add_to_history(user_id, code)
+    kb = build_movie_kb(user_id, code, likes, dislikes)
+    await bot.send_video(call.message.chat.id, file_id,
+                         caption=f"🎯 Sizga tavsiya: {description}\n\n🎬 Kod: {code}", reply_markup=kb)
+    await call.answer()
+ 
 @dp.message(F.text)
 async def search_movie(message: types.Message, state: FSMContext):
     # Пропускаем кнопки меню
-    menu_texts = ["🎭 Janrlar", "🔍 Qidirish", "📜 Tarix", "📋 Barcha kinolar"]
+    menu_texts = [
+        "🎭 Janrlar", "🔍 Qidirish", "📜 Tarix", "📋 Barcha kinolar",
+        # НОВОЕ: новые кнопки тоже должны пропускаться этим хендлером
+        "🗂 Tanlov yaratish", "🗂 Tanlovlar", "🎯 Nima ko'raman?", "💾 Bazani yuklab olish"
+    ]
     if message.text in menu_texts:
         return
  
@@ -871,8 +1053,8 @@ async def similar_movies(call: types.CallbackQuery):
     await call.message.answer(text)
     await call.answer()
  
-# ============================================================
-# ВЕБ + ЗАПУСК
+ 
+ 
 # ============================================================
 async def run_web():
     app = web.Application()
@@ -884,6 +1066,7 @@ async def run_web():
  
 async def main():
     await run_web()
+    asyncio.create_task(daily_auto_backup())  # НОВОЕ: автоматический ежедневный бэкап базы
     await dp.start_polling(bot)
  
 if __name__ == "__main__":
