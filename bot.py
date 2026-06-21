@@ -78,20 +78,6 @@ cursor.execute('''CREATE TABLE IF NOT EXISTS collections (
 )''')
 conn.commit()
  
-# НОВОЕ: поддержка языков (RU/UZ) — у фильма может быть видео на двух языках
-try:
-    cursor.execute('ALTER TABLE movies ADD COLUMN file_id_uz TEXT')
-    conn.commit()
-except: pass
-try:
-    cursor.execute('ALTER TABLE series ADD COLUMN file_id_uz TEXT')
-    conn.commit()
-except: pass
-try:
-    cursor.execute('ALTER TABLE users ADD COLUMN language TEXT')
-    conn.commit()
-except: pass
- 
 # ============================================================
 # СТАРЫЕ СОСТОЯНИЯ (не трогаем)
 # ============================================================
@@ -117,7 +103,6 @@ class AddSeries(StatesGroup):
 # ============================================================
 class AddMovieNew(StatesGroup):
     file_id = State()
-    file_id_uz = State()
     code = State()
     description = State()
     genre = State()
@@ -237,19 +222,6 @@ def genres_display(genre_field, emoji_only=False):
         return GENRES.get(parts[0], "🎬").split(" ")[0]
     return ", ".join([GENRES.get(p, p) for p in parts])
  
-def get_user_language(user_id):
-    """НОВОЕ: возвращает выбранный юзером язык ('ru' или 'uz'), по умолчанию 'ru'."""
-    cursor.execute('SELECT language FROM users WHERE user_id=?', (user_id,))
-    res = cursor.fetchone()
-    return res[0] if res and res[0] else 'ru'
- 
-def pick_video_for_language(file_id_ru, file_id_uz, user_lang):
-    """НОВОЕ: выбирает нужную версию видео под язык юзера.
-    Если нужной версии нет — отдаёт ту, что есть (чтобы фильм не "пропадал" для юзера)."""
-    if user_lang == 'uz':
-        return file_id_uz if file_id_uz else file_id_ru
-    return file_id_ru if file_id_ru else file_id_uz
- 
 # НОВОЕ: пересылаем видео в архивный канал и возвращаем "вечный" file_id оттуда.
 # Это решает проблему "бот хранит фильм недолго, потом видео пропадает" —
 # file_id привязанный к посту в канале не протухает, в отличие от file_id
@@ -340,28 +312,6 @@ async def restore_db_from_channel_if_needed():
 # ============================================================
 # СТАРЫЕ ХЕНДЛЕРЫ (не трогаем)
 # ============================================================
-def language_select_kb():
-    """НОВОЕ: клавиатура выбора языка интерфейса/фильма"""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🇷🇺 Русский", callback_data="setlang|ru")],
-        [InlineKeyboardButton(text="🇺🇿 O'zbek tili", callback_data="setlang|uz")]
-    ])
- 
-async def show_main_menu(user_id, message_or_call_target):
-    """НОВОЕ: вынесли старую логику показа меню в функцию, чтобы вызывать её и
-    после выбора языка, и после проверки подписки — старую логику не меняли,
-    просто переиспользуем."""
-    if user_id in ADMINS:
-        await bot.send_message(user_id, "👑 Admin panel:", reply_markup=admin_kb)
-    elif not await is_subscribed(user_id):
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📢 Obuna bo'lish", url=CHANNEL_URL)],
-            [InlineKeyboardButton(text="✅ Tekshirish", callback_data="check_sub")]
-        ])
-        await bot.send_message(user_id, "👋 Kino ko'rish uchun kanalga obuna bo'ling!", reply_markup=kb)
-    else:
-        await bot.send_message(user_id, "🎬 Kino kodini yuboring:", reply_markup=user_kb)
- 
 @dp.message(Command("start"))
 async def start(message: types.Message):
     cursor.execute('INSERT OR IGNORE INTO users (user_id) VALUES (?)', (message.from_user.id,))
@@ -370,30 +320,16 @@ async def start(message: types.Message):
         cursor.execute('UPDATE users SET username=? WHERE user_id=?',
                       (message.from_user.username, message.from_user.id))
     conn.commit()
- 
-    # НОВОЕ: спрашиваем язык при первом входе (если ещё не выбран)
-    cursor.execute('SELECT language FROM users WHERE user_id=?', (message.from_user.id,))
-    res = cursor.fetchone()
-    if not res or not res[0]:
-        await message.answer(
-            "🌐 Tilni tanlang / Выберите язык:",
-            reply_markup=language_select_kb()
-        )
-        return
- 
-    await show_main_menu(message.from_user.id, message)
- 
-@dp.callback_query(F.data.startswith("setlang|"))
-async def set_language(call: types.CallbackQuery):
-    lang = call.data.split("|")[1]
-    cursor.execute('UPDATE users SET language=? WHERE user_id=?', (lang, call.from_user.id))
-    conn.commit()
-    lang_name = "Русский" if lang == "ru" else "O'zbek tili"
-    try:
-        await call.message.edit_text(f"✅ {lang_name}")
-    except: pass
-    await show_main_menu(call.from_user.id, call)
-    await call.answer()
+    if message.from_user.id in ADMINS:
+        await message.answer("👑 Admin panel:", reply_markup=admin_kb)
+    elif not await is_subscribed(message.from_user.id):
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📢 Obuna bo'lish", url=CHANNEL_URL)],
+            [InlineKeyboardButton(text="✅ Tekshirish", callback_data="check_sub")]
+        ])
+        await message.answer("👋 Kino ko'rish uchun kanalga obuna bo'ling!", reply_markup=kb)
+    else:
+        await message.answer("🎬 Kino kodini yuboring:", reply_markup=user_kb)
  
 @dp.callback_query(F.data == "check_sub")
 async def check_sub(call: types.CallbackQuery):
@@ -599,7 +535,7 @@ async def mailing_skip_photo(message: types.Message, state: FSMContext):
     await message.answer("📝 Xabar matnini yozing:")
     await state.set_state(Mailing.text)
  
-@dp.message(Mailing.text)
+@dp.message(Mailing.text, ~F.text.startswith("/"))
 async def mailing_process(message: types.Message, state: FSMContext):
     data = await state.get_data()
     photo = data.get('photo')
@@ -631,7 +567,7 @@ async def get_video_new(message: types.Message, state: FSMContext):
     await message.answer("🔢 Kodini yozing:")
     await state.set_state(AddMovieNew.code)
  
-@dp.message(AddMovieNew.code)
+@dp.message(AddMovieNew.code, ~F.text.startswith("/"))
 async def get_code_new(message: types.Message, state: FSMContext):
     await state.update_data(code=message.text)
     await message.answer("📝 Kinosining tavsifini yozing:")
@@ -646,7 +582,7 @@ def build_genre_select_kb(selected_genres):
     rows.append([InlineKeyboardButton(text="✔️ Tayyor", callback_data="genredone")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
  
-@dp.message(AddMovieNew.description)
+@dp.message(AddMovieNew.description, ~F.text.startswith("/"))
 async def get_description_new(message: types.Message, state: FSMContext):
     await state.update_data(description=message.text, selected_genres=[])
     await message.answer(
@@ -679,54 +615,15 @@ async def set_genre(call: types.CallbackQuery, state: FSMContext):
         return
     # НОВОЕ: храним несколько жанров через запятую, например "love,horror,thriller"
     genre_str = ",".join(selected)
-    await state.update_data(genre_str=genre_str)
-    genre_names = ", ".join([GENRES.get(g, g) for g in selected])
-    await call.message.edit_text(f"✅ Janrlar tanlandi: {genre_names}")
- 
-    # НОВОЕ: спрашиваем — есть ли узбекская версия этого фильма
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🇺🇿 Ha, o'zbek tilida ham bor", callback_data="uzlang_yes")],
-        [InlineKeyboardButton(text="➡️ Yo'q, faqat shu til", callback_data="uzlang_no")]
-    ])
-    await bot.send_message(
-        call.from_user.id,
-        "🌐 Bu kinoning o'zbek tilidagi versiyasi bormi?",
-        reply_markup=kb
-    )
-    await state.set_state(AddMovieNew.file_id_uz)
- 
-@dp.callback_query(F.data == "uzlang_yes", AddMovieNew.file_id_uz)
-async def ask_uz_video(call: types.CallbackQuery):
-    await call.message.edit_text("📹 O'zbek tilidagi videoni yuboring:")
-    await call.answer()
- 
-@dp.message(AddMovieNew.file_id_uz, F.video | F.document)
-async def get_uz_video_and_save(message: types.Message, state: FSMContext):
-    file_id_uz = message.video.file_id if message.video else message.document.file_id
-    data = await state.get_data()
-    # НОВОЕ: архивируем оба видео, чтобы они хранились вечно
-    archived_ru = await archive_video(data['file_id'], caption=f"🎬 Kod: {data['code']} (RU)")
-    archived_uz = await archive_video(file_id_uz, caption=f"🎬 Kod: {data['code']} (UZ)")
-    cursor.execute(
-        'INSERT OR REPLACE INTO movies (code, file_id, file_id_uz, description, genre) VALUES (?, ?, ?, ?, ?)',
-        (data['code'], archived_ru, archived_uz, data['description'], data['genre_str'])
-    )
-    conn.commit()
-    await message.answer("✅ Kino ikki tilda saqlandi! (RU + UZ)", reply_markup=admin_kb)
-    await state.clear()
-    asyncio.create_task(backup_db_to_channel())  # НОВОЕ: бэкапим базу после изменения
- 
-@dp.callback_query(F.data == "uzlang_no", AddMovieNew.file_id_uz)
-async def skip_uz_video(call: types.CallbackQuery, state: FSMContext):
-    data = await state.get_data()
     # НОВОЕ: дублируем видео в архивный канал, чтобы оно хранилось вечно
     archived_file_id = await archive_video(data['file_id'], caption=f"🎬 Kod: {data['code']}")
     cursor.execute(
         'INSERT OR REPLACE INTO movies (code, file_id, description, genre) VALUES (?, ?, ?, ?)',
-        (data['code'], archived_file_id, data['description'], data['genre_str'])
+        (data['code'], archived_file_id, data['description'], genre_str)
     )
     conn.commit()
-    await call.message.edit_text("✅ Kino saqlandi! (faqat 1 til)")
+    genre_names = ", ".join([GENRES.get(g, g) for g in selected])
+    await call.message.edit_text(f"✅ Kino saqlandi! Janrlar: {genre_names}")
     await bot.send_message(call.from_user.id, "👑 Admin panel:", reply_markup=admin_kb)
     await state.clear()
     asyncio.create_task(backup_db_to_channel())  # НОВОЕ: бэкапим базу после изменения
@@ -738,7 +635,7 @@ async def del_movie(message: types.Message, state: FSMContext):
     await message.answer("❌ O'chirmoqchi bo'lgan kodni yozing:")
     await state.set_state(DelMovie.code)
  
-@dp.message(DelMovie.code)
+@dp.message(DelMovie.code, ~F.text.startswith("/"))
 async def delete_process(message: types.Message, state: FSMContext):
     cursor.execute('DELETE FROM movies WHERE code = ?', (message.text,))
     conn.commit()
@@ -753,13 +650,13 @@ async def add_series_start(message: types.Message, state: FSMContext):
     await message.answer("🔢 Serial uchun kod kiriting (masalan: BREAKING_BAD):")
     await state.set_state(AddSeries.series_code)
  
-@dp.message(AddSeries.series_code)
+@dp.message(AddSeries.series_code, ~F.text.startswith("/"))
 async def add_series_code(message: types.Message, state: FSMContext):
     await state.update_data(series_code=message.text.strip(), next_episode=1)
     await message.answer("📝 Serial uchun umumiy tavsif yozing:")
     await state.set_state(AddSeries.description)
  
-@dp.message(AddSeries.description)
+@dp.message(AddSeries.description, ~F.text.startswith("/"))
 async def add_series_description(message: types.Message, state: FSMContext):
     await state.update_data(description=message.text)
     data = await state.get_data()
@@ -874,7 +771,7 @@ async def create_collection_start(message: types.Message, state: FSMContext):
     await message.answer("📝 Tanlov nomini yozing (masalan: \"🔥 Hafta TOP-5\"):")
     await state.set_state(CreateCollection.title)
  
-@dp.message(CreateCollection.title)
+@dp.message(CreateCollection.title, ~F.text.startswith("/"))
 async def create_collection_title(message: types.Message, state: FSMContext):
     await state.update_data(title=message.text.strip())
     await message.answer(
@@ -883,7 +780,7 @@ async def create_collection_title(message: types.Message, state: FSMContext):
     )
     await state.set_state(CreateCollection.codes)
  
-@dp.message(CreateCollection.codes)
+@dp.message(CreateCollection.codes, ~F.text.startswith("/"))
 async def create_collection_codes(message: types.Message, state: FSMContext):
     data = await state.get_data()
     codes = [c.strip() for c in message.text.split(",") if c.strip()]
@@ -985,7 +882,7 @@ async def quiz_mood(call: types.CallbackQuery):
                          caption=f"🎯 Sizga tavsiya: {description}\n\n🎬 Kod: {code}", reply_markup=kb)
     await call.answer()
  
-@dp.message(F.text)
+@dp.message(F.text, ~F.text.startswith("/"))
 async def search_movie(message: types.Message, state: FSMContext):
     # Пропускаем кнопки меню
     menu_texts = [
@@ -1221,7 +1118,7 @@ async def search_start(message: types.Message, state: FSMContext):
     await message.answer("🔍 Kino nomi yoki tavsifidan so'z kiriting:")
     await state.set_state(SearchMovie.query)
  
-@dp.message(SearchMovie.query)
+@dp.message(SearchMovie.query, ~F.text.startswith("/"))
 async def search_process(message: types.Message, state: FSMContext):
     query = message.text.strip()
     cursor.execute(
