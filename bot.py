@@ -23,7 +23,19 @@ ARCHIVE_CHANNEL_ID = -1003788948077
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
  
-conn = sqlite3.connect('movies.db', check_same_thread=False)
+# НОВОЕ: используем постоянный диск Render (Persistent Disk), если он подключён.
+# На Render временная папка проекта (/opt/render/project/src) стирается при
+# каждом деплое — поэтому база там не выживает между обновлениями.
+# Если в настройках Render подключён диск с Mount Path = /var/data,
+# бот будет хранить там movies.db, и база переживёт любой деплой.
+# Если диск пока не подключён — работает как раньше, локально (без сюрпризов).
+PERSISTENT_DIR = "/var/data"
+if os.path.isdir(PERSISTENT_DIR):
+    DB_PATH = os.path.join(PERSISTENT_DIR, "movies.db")
+else:
+    DB_PATH = "movies.db"
+ 
+conn = sqlite3.connect(DB_PATH, check_same_thread=False)
 cursor = conn.cursor()
  
 # ============================================================
@@ -256,7 +268,7 @@ async def backup_db_to_channel():
         conn.commit()
         sent = await bot.send_document(
             ARCHIVE_CHANNEL_ID,
-            FSInputFile('movies.db'),
+            FSInputFile(DB_PATH),
             caption=f"{BACKUP_MARKER}\n💾 {datetime.now().strftime('%d.%m.%Y %H:%M')}"
         )
         await bot.pin_chat_message(ARCHIVE_CHANNEL_ID, sent.message_id, disable_notification=True)
@@ -294,9 +306,9 @@ async def restore_db_from_channel_if_needed():
             return
         if pinned.caption and BACKUP_MARKER in pinned.caption:
             file = await bot.get_file(pinned.document.file_id)
-            await bot.download_file(file.file_path, destination='movies.db')
+            await bot.download_file(file.file_path, destination=DB_PATH)
             conn.close()
-            conn = sqlite3.connect('movies.db', check_same_thread=False)
+            conn = sqlite3.connect(DB_PATH, check_same_thread=False)
             cursor = conn.cursor()
             logging.info("✅ Baza arxivdan muvaffaqiyatli tiklandi!")
             for admin_id in ADMINS:
@@ -738,7 +750,7 @@ async def admin_backup(message: types.Message):
     try:
         conn.commit()  # на всякий случай сохраняем все изменения перед копией
         await message.answer_document(
-            FSInputFile('movies.db'),
+            FSInputFile(DB_PATH),
             caption=f"💾 Zaxira nusxa | {datetime.now().strftime('%d.%m.%Y %H:%M')}"
         )
     except Exception as e:
@@ -754,7 +766,7 @@ async def daily_auto_backup():
                 try:
                     await bot.send_document(
                         admin_id,
-                        FSInputFile('movies.db'),
+                        FSInputFile(DB_PATH),
                         caption=f"💾 Avtomatik zaxira nusxa | {datetime.now().strftime('%d.%m.%Y %H:%M')}"
                     )
                 except: pass
@@ -1020,10 +1032,17 @@ async def server_info(message: types.Message):
     else:
         info_lines.append("📦 Aniqlangan hosting: noma'lum (ehtimol VPS yoki boshqa xizmat)")
  
+    # НОВОЕ: показываем, используется ли постоянный диск
+    if os.path.isdir(PERSISTENT_DIR):
+        info_lines.append(f"✅ Doimiy disk ulangan: {PERSISTENT_DIR}")
+    else:
+        info_lines.append(f"⚠️ Doimiy disk topilmadi ({PERSISTENT_DIR} mavjud emas) — baza vaqtinchalik papkada saqlanmoqda!")
+    info_lines.append(f"📍 Baza fayli joylashgan joy: {DB_PATH}")
+ 
     # Проверяем существование и возраст файла базы — намёк, давно ли "живёт" диск
-    if os.path.exists('movies.db'):
-        size_kb = os.path.getsize('movies.db') / 1024
-        mtime = datetime.fromtimestamp(os.path.getmtime('movies.db')).strftime('%d.%m.%Y %H:%M')
+    if os.path.exists(DB_PATH):
+        size_kb = os.path.getsize(DB_PATH) / 1024
+        mtime = datetime.fromtimestamp(os.path.getmtime(DB_PATH)).strftime('%d.%m.%Y %H:%M')
         info_lines.append(f"💾 movies.db hajmi: {size_kb:.1f} KB")
         info_lines.append(f"🕐 Oxirgi o'zgartirilgan vaqti: {mtime}")
     else:
@@ -1066,9 +1085,9 @@ async def confirm_restore(call: types.CallbackQuery):
         return
     try:
         file = await bot.get_file(pinned.document.file_id)
-        await bot.download_file(file.file_path, destination='movies.db')
+        await bot.download_file(file.file_path, destination=DB_PATH)
         conn.close()
-        conn = sqlite3.connect('movies.db', check_same_thread=False)
+        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
         cursor = conn.cursor()
         await call.message.edit_text("✅ Baza muvaffaqiyatli tiklandi!")
     except Exception as e:
