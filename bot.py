@@ -1100,6 +1100,48 @@ async def manual_backup(message: types.Message):
     await backup_db_to_channel()
     await message.answer("✅ Bazaning zaxira nusxasi arxiv kanaliga yuborildi va qadab qo'yildi.")
  
+# --- НОВОЕ: диагностика хостинга — помогает понять, временный диск или постоянный ---
+@dp.message(Command("server_info"))
+async def server_info(message: types.Message):
+    if message.from_user.id not in ADMINS:
+        return
+    info_lines = ["🖥 Server haqida ma'lumot:\n"]
+ 
+    # Определяем тип хостинга по характерным переменным окружения
+    hosting_hints = []
+    if os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("RAILWAY_PROJECT_ID"):
+        hosting_hints.append("Railway")
+    if os.environ.get("RENDER"):
+        hosting_hints.append("Render")
+    if os.environ.get("FLY_APP_NAME"):
+        hosting_hints.append("Fly.io")
+    if os.environ.get("HEROKU_APP_NAME") or os.environ.get("DYNO"):
+        hosting_hints.append("Heroku")
+ 
+    if hosting_hints:
+        info_lines.append(f"📦 Aniqlangan hosting: {', '.join(hosting_hints)}")
+    else:
+        info_lines.append("📦 Aniqlangan hosting: noma'lum (ehtimol VPS yoki boshqa xizmat)")
+ 
+    # Проверяем существование и возраст файла базы — намёк, давно ли "живёт" диск
+    if os.path.exists('movies.db'):
+        size_kb = os.path.getsize('movies.db') / 1024
+        mtime = datetime.fromtimestamp(os.path.getmtime('movies.db')).strftime('%d.%m.%Y %H:%M')
+        info_lines.append(f"💾 movies.db hajmi: {size_kb:.1f} KB")
+        info_lines.append(f"🕐 Oxirgi o'zgartirilgan vaqti: {mtime}")
+    else:
+        info_lines.append("💾 movies.db topilmadi (!)")
+ 
+    info_lines.append(f"\n📂 Joriy papka: {os.getcwd()}")
+    info_lines.append(
+        "\nℹ️ Agar bot har safar qayta ishga tushganda (deploy/update) "
+        "yuqoridagi 'oxirgi o'zgartirilgan vaqti' joriy vaqtga teng bo'lib qolsa — "
+        "demak disk doimiy emas (vaqtinchalik), va bazani saqlash uchun "
+        "hosting sozlamalarida 'persistent volume/disk' yoqish kerak."
+    )
+ 
+    await message.answer("\n".join(info_lines))
+ 
 # --- НОВОЕ: ручное восстановление базы из архивного канала (на случай если автоматика не сработала) ---
 @dp.message(Command("restore_db"))
 async def manual_restore(message: types.Message):
