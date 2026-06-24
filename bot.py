@@ -1254,6 +1254,20 @@ async def run_web():
  
 async def main():
     await run_web()
+    # НОВОЕ: при старте бот сам проверяет и логирует, под каким именно
+    # username/ID он сейчас работает. Это помогает убедиться, что на сервере
+    # (Render и т.д.) запущена правильная версия бота с правильным токеном,
+    # а не какая-то другая/чужая копия.
+    try:
+        me = await bot.get_me()
+        logging.info(f"✅ Bot ishga tushdi: @{me.username} (ID: {me.id})")
+        for admin_id in ADMINS:
+            try:
+                await bot.send_message(admin_id, f"🤖 Bot ishga tushdi: @{me.username} (ID: {me.id})")
+            except: pass
+    except Exception as e:
+        logging.error(f"Bot ma'lumotlarini olishda xatolik: {e}")
+ 
     await restore_db_from_channel_if_needed()  # НОВОЕ: автовосстановление базы при "чистом" старте
     asyncio.create_task(daily_auto_backup())  # НОВОЕ: автоматический ежедневный бэкап базы
     await dp.start_polling(bot)
