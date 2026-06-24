@@ -1252,23 +1252,52 @@ async def run_web():
     site = web.TCPSite(runner, '0.0.0.0', int(os.environ.get('PORT', 8080)))
     await site.start()
  
-async def main():
-    await run_web()
-    # НОВОЕ: при старте бот сам проверяет и логирует, под каким именно
-    # username/ID он сейчас работает. Это помогает убедиться, что на сервере
-    # (Render и т.д.) запущена правильная версия бота с правильным токеном,
-    # а не какая-то другая/чужая копия.
+async def startup_self_check():
+    """НОВОЕ: при старте бот сам проверяет и логирует, под каким именно
+    username/ID он сейчас работает. Это помогает убедиться, что на сервере
+    (Render и т.д.) запущена правильная версия бота с правильным токеном,
+    а не какая-то другая/чужая копия.
+ 
+    ВАЖНО: обёрнуто в asyncio.wait_for с таймаутом — если Telegram API
+    почему-то не отвечает быстро, эта проверка просто прервётся по таймауту
+    и НЕ заблокирует остальную работу бота."""
     try:
-        me = await bot.get_me()
+        me = await asyncio.wait_for(bot.get_me(), timeout=15)
         logging.info(f"✅ Bot ishga tushdi: @{me.username} (ID: {me.id})")
         for admin_id in ADMINS:
             try:
-                await bot.send_message(admin_id, f"🤖 Bot ishga tushdi: @{me.username} (ID: {me.id})")
+                await asyncio.wait_for(
+                    bot.send_message(admin_id, f"🤖 Bot ishga tushdi: @{me.username} (ID: {me.id})"),
+                    timeout=10
+                )
             except: pass
     except Exception as e:
         logging.error(f"Bot ma'lumotlarini olishda xatolik: {e}")
  
-    await restore_db_from_channel_if_needed()  # НОВОЕ: автовосстановление базы при "чистом" старте
+async def safe_restore_db():
+    """НОВОЕ: безопасная обёртка над restore_db_from_channel_if_needed() с
+    общим таймаутом. Если восстановление из архива зависнет на сетевом
+    вызове (get_chat / get_file / download_file) дольше 30 секунд —
+    операция прервётся сама, и бот продолжит работать в обычном режиме
+    вместо того, чтобы зависнуть навсегда."""
+    try:
+        await asyncio.wait_for(restore_db_from_channel_if_needed(), timeout=30)
+    except asyncio.TimeoutError:
+        logging.error("⏱ Bazani tiklash 30 soniyadan ko'p davom etdi — to'xtatildi. Bot oddiy rejimda davom etadi.")
+    except Exception as e:
+        logging.error(f"Bazani tiklashda kutilmagan xatolik: {e}")
+ 
+async def main():
+    await run_web()
+    # НОВОЕ: ВАЖНО — поллинг (приём сообщений от юзеров) запускается СРАЗУ,
+    # параллельно с фоновыми задачами (самопроверка, восстановление базы).
+    # Раньше эти фоновые задачи выполнялись ДО старта поллинга — и если
+    # какая-то из них зависала на сетевом вызове, бот вообще не начинал
+    # принимать сообщения, хотя сам процесс оставался "живым" на хостинге.
+    # Теперь бот отвечает на сообщения сразу, а восстановление базы (если
+    # оно нужно) происходит параллельно в фоне.
+    asyncio.create_task(startup_self_check())
+    asyncio.create_task(safe_restore_db())
     asyncio.create_task(daily_auto_backup())  # НОВОЕ: автоматический ежедневный бэкап базы
     await dp.start_polling(bot)
  
