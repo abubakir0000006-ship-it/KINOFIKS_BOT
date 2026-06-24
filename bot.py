@@ -12,7 +12,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeybo
  
 logging.basicConfig(level=logging.INFO)
  
-API_TOKEN = '8697886925:AAGJJwn-GfKWPGb4yoUzyA-ChTdURToQ1Ac'
+API_TOKEN = '8697886925:AAFqcntlbL393N5khyOqRhKnFzkN0qWxHzc'
 CHANNEL_ID = -1004399893412
 CHANNEL_URL = "https://t.me/+PpgAdF1iQ8xhODEy"
 ADMINS = [8925518277, 8350819510]
