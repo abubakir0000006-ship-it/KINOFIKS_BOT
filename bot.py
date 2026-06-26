@@ -987,16 +987,40 @@ async def quiz_mood(call: types.CallbackQuery):
                          caption=f"🎯 Sizga tavsiya: {description}\n\n🎬 Kod: {code}", reply_markup=kb)
     await call.answer()
  
-# --- Реклама: контакт с владельцем бота для покупки рекламы ---
+# --- Реклама: красивое приветствие с живой статистикой + контакт с владельцем бота ---
 @dp.message(F.text == "📢 Reklama")
 async def ad_contact(message: types.Message):
+    # НОВОЕ: подтягиваем живую статистику бота, чтобы рекламодатель сразу видел масштаб
+    cursor.execute('SELECT COUNT(*) FROM users')
+    user_count = cursor.fetchone()[0]
+    cursor.execute('SELECT COUNT(*) FROM movies')
+    movie_count = cursor.fetchone()[0]
+    cursor.execute('SELECT COUNT(DISTINCT series_code) FROM series')
+    series_count = cursor.fetchone()[0]
+    cursor.execute('SELECT COALESCE(SUM(view_count), 0) FROM movies')
+    total_views = cursor.fetchone()[0]
+ 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✍️ Admin bilan bog'lanish", url=f"https://t.me/{AD_CONTACT_USERNAME}")]
     ])
-    await message.answer(
-        "📢 Botda reklama joylashtirish uchun admin bilan bog'laning:",
-        reply_markup=kb
+ 
+    text = (
+        "🎬 <b>KINOFIKS — reklama uchun hamkorlik</b>\n\n"
+        "Botimizda reklama joylashtirib, minglab faol foydalanuvchiga\n"
+        "to'g'ridan-to'g'ri murojaat qiling! 🚀\n\n"
+        "📊 <b>Bizning ko'rsatkichlarimiz:</b>\n"
+        f"👥 Foydalanuvchilar: <b>{user_count:,}</b> ta\n"
+        f"🎬 Kinolar bazasi: <b>{movie_count}</b> ta\n"
+        f"📺 Seriallar: <b>{series_count}</b> ta\n"
+        f"👁 Jami ko'rishlar: <b>{total_views:,}</b> marta\n\n"
+        "💼 <b>Reklama formatlari:</b>\n"
+        "• Rasylka (barcha foydalanuvchilarga xabar)\n"
+        "• Kino oldidan/orasida banner\n"
+        "• Maxsus tanlovlarda joylashtirish\n\n"
+        "📩 Narxlar va shartlar bo'yicha admin bilan bog'laning:"
     )
+ 
+    await message.answer(text, reply_markup=kb, parse_mode="HTML")
  
 # --- Жанры ---
 def build_user_genre_kb(page=1):
