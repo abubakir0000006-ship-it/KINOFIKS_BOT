@@ -175,11 +175,7 @@ admin_kb = ReplyKeyboardMarkup(keyboard=[
     [KeyboardButton(text="➕ Kino qo'shish"), KeyboardButton(text="🗑 Kino o'chirish")],
     [KeyboardButton(text="📺 Serial qo'shish"), KeyboardButton(text="📋 Barcha kinolar")],
     [KeyboardButton(text="📊 Statistika"), KeyboardButton(text="📢 Xabar yuborish")],
-    [KeyboardButton(text="🔥 Tasodifiy kino"), KeyboardButton(text="⭐ TOP 10")],
-    [KeyboardButton(text="🆕 Yangi kinolar"), KeyboardButton(text="📁 Saqlanganlar")],
-    [KeyboardButton(text="👤 Profil"), KeyboardButton(text="🔍 Qidirish")],
-    # НОВОЕ
-    [KeyboardButton(text="🗂 Tanlov yaratish"), KeyboardButton(text="🎯 Nima ko'raman?")],
+    [KeyboardButton(text="🔍 Qidirish"), KeyboardButton(text="🗂 Tanlov yaratish")],
     [KeyboardButton(text="💾 Bazani yuklab olish"), KeyboardButton(text="👥 Foydalanuvchilar")]
 ], resize_keyboard=True)
  
@@ -188,9 +184,13 @@ user_kb = ReplyKeyboardMarkup(keyboard=[
     [KeyboardButton(text="🆕 Yangi kinolar"), KeyboardButton(text="📁 Saqlanganlar")],
     [KeyboardButton(text="🎭 Janrlar"), KeyboardButton(text="🔍 Qidirish")],
     [KeyboardButton(text="📜 Tarix"), KeyboardButton(text="👤 Profil")],
-    # НОВОЕ
-    [KeyboardButton(text="🗂 Tanlovlar"), KeyboardButton(text="🎯 Nima ko'raman?")]
+    [KeyboardButton(text="🗂 Tanlovlar"), KeyboardButton(text="📢 Reklama")]
 ], resize_keyboard=True)
+ 
+# НОВОЕ: юзернейм владельца бота, на кого ведёт кнопка "📢 Reklama"
+AD_CONTACT_USERNAME = "AKADEMIKOOO"
+ 
+ 
  
 # ============================================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (старые — не трогаем)
@@ -987,6 +987,17 @@ async def quiz_mood(call: types.CallbackQuery):
                          caption=f"🎯 Sizga tavsiya: {description}\n\n🎬 Kod: {code}", reply_markup=kb)
     await call.answer()
  
+# --- Реклама: контакт с владельцем бота для покупки рекламы ---
+@dp.message(F.text == "📢 Reklama")
+async def ad_contact(message: types.Message):
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✍️ Admin bilan bog'lanish", url=f"https://t.me/{AD_CONTACT_USERNAME}")]
+    ])
+    await message.answer(
+        "📢 Botda reklama joylashtirish uchun admin bilan bog'laning:",
+        reply_markup=kb
+    )
+ 
 # --- Жанры ---
 def build_user_genre_kb(page=1):
     """НОВОЕ: клавиатура жанров для юзера с пагинацией (2 страницы) — не растягивается во весь экран."""
@@ -1092,7 +1103,9 @@ ALL_MENU_BUTTON_TEXTS = [
     "🎭 Janrlar", "🔍 Qidirish", "📜 Tarix", "📋 Barcha kinolar",
     "🗂 Tanlov yaratish", "🗂 Tanlovlar", "🎯 Nima ko'raman?", "💾 Bazani yuklab olish",
     # НОВОЕ: новая кнопка для просмотра списка юзеров тоже должна пропускаться
-    "👥 Foydalanuvchilar"
+    "👥 Foydalanuvchilar",
+    # НОВОЕ: кнопка рекламы для юзеров тоже должна пропускаться
+    "📢 Reklama"
 ]
  
 @dp.message(F.text, ~F.text.startswith("/"), ~F.text.in_(ALL_MENU_BUTTON_TEXTS))
