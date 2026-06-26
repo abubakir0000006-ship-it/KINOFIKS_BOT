@@ -71,6 +71,11 @@ try:
     cursor.execute('ALTER TABLE users ADD COLUMN age_confirmed INTEGER DEFAULT 0')
     conn.commit()
 except: pass
+# НОВОЕ: сохраняем полное имя из Telegram (для отчётности рекламодателям)
+try:
+    cursor.execute('ALTER TABLE users ADD COLUMN full_name TEXT')
+    conn.commit()
+except: pass
  
 cursor.execute('''CREATE TABLE IF NOT EXISTS history (
     user_id INTEGER,
@@ -175,7 +180,7 @@ admin_kb = ReplyKeyboardMarkup(keyboard=[
     [KeyboardButton(text="👤 Profil"), KeyboardButton(text="🔍 Qidirish")],
     # НОВОЕ
     [KeyboardButton(text="🗂 Tanlov yaratish"), KeyboardButton(text="🎯 Nima ko'raman?")],
-    [KeyboardButton(text="💾 Bazani yuklab olish")]
+    [KeyboardButton(text="💾 Bazani yuklab olish"), KeyboardButton(text="👥 Foydalanuvchilar")]
 ], resize_keyboard=True)
  
 user_kb = ReplyKeyboardMarkup(keyboard=[
@@ -351,6 +356,11 @@ async def start(message: types.Message):
     if message.from_user.username:
         cursor.execute('UPDATE users SET username=? WHERE user_id=?',
                       (message.from_user.username, message.from_user.id))
+    # НОВОЕ: сохраняем полное имя (Telegram first_name + last_name) для отчётности рекламодателям
+    full_name = message.from_user.full_name
+    if full_name:
+        cursor.execute('UPDATE users SET full_name=? WHERE user_id=?',
+                      (full_name, message.from_user.id))
     conn.commit()
     if message.from_user.id in ADMINS:
         await message.answer("👑 Admin panel:", reply_markup=admin_kb)
@@ -798,6 +808,47 @@ async def admin_backup(message: types.Message):
     except Exception as e:
         await message.answer(f"❌ Xatolik: {e}")
  
+# --- НОВОЕ: полный список юзеров с username и именем — удобно показать рекламодателям ---
+@dp.message(F.text == "👥 Foydalanuvchilar")
+async def admin_users_list(message: types.Message):
+    if message.from_user.id not in ADMINS:
+        return
+ 
+    cursor.execute('SELECT COUNT(*) FROM users')
+    total_count = cursor.fetchone()[0]
+ 
+    # Краткая сводка сразу в чате
+    await message.answer(
+        f"👥 Botdagi jami foydalanuvchilar: <b>{total_count}</b>\n\n"
+        f"⏳ To'liq ro'yxat tayyorlanmoqda...",
+        parse_mode="HTML"
+    )
+ 
+    # Готовим полный CSV-файл со всеми доступными данными
+    cursor.execute('SELECT user_id, username, full_name, viewed_count FROM users ORDER BY viewed_count DESC')
+    rows = cursor.fetchall()
+ 
+    file_name = "foydalanuvchilar.csv"
+    with open(file_name, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["Telegram ID", "Username", "Ism (Telegramdagi)", "Ko'rilgan kinolar soni"])
+        for r in rows:
+            uid, username, full_name, viewed = r
+            username_display = f"@{username}" if username else "—"
+            name_display = full_name if full_name else "—"
+            writer.writerow([uid, username_display, name_display, viewed or 0])
+ 
+    await message.answer_document(
+        FSInputFile(file_name),
+        caption=(
+            f"📊 To'liq foydalanuvchilar ro'yxati\n"
+            f"👥 Jami: {total_count} ta\n"
+            f"📅 {datetime.now().strftime('%d.%m.%Y %H:%M')}\n\n"
+            f"ℹ️ Reklama beruvchilarga auditoriya hajmini ko'rsatish uchun foydalaning."
+        )
+    )
+    os.remove(file_name)
+ 
 async def daily_auto_backup():
     """НОВОЕ: раз в сутки бот сам отправляет всем админам бэкап базы данных."""
     while True:
@@ -936,16 +987,116 @@ async def quiz_mood(call: types.CallbackQuery):
                          caption=f"🎯 Sizga tavsiya: {description}\n\n🎬 Kod: {code}", reply_markup=kb)
     await call.answer()
  
-@dp.message(F.text, ~F.text.startswith("/"))
-async def search_movie(message: types.Message, state: FSMContext):
-    # Пропускаем кнопки меню
-    menu_texts = [
-        "🎭 Janrlar", "🔍 Qidirish", "📜 Tarix", "📋 Barcha kinolar",
-        # НОВОЕ: новые кнопки тоже должны пропускаться этим хендлером
-        "🗂 Tanlov yaratish", "🗂 Tanlovlar", "🎯 Nima ko'raman?", "💾 Bazani yuklab olish"
-    ]
-    if message.text in menu_texts:
+# --- Жанры ---
+def build_user_genre_kb(page=1):
+    """НОВОЕ: клавиатура жанров для юзера с пагинацией (2 страницы) — не растягивается во весь экран."""
+    rows = []
+    page_keys = GENRES_PAGE_1 if page == 1 else GENRES_PAGE_2
+    for k in page_keys:
+        rows.append([InlineKeyboardButton(text=GENRES.get(k, k), callback_data=f"genre|{k}")])
+ 
+    if page == 1:
+        rows.append([InlineKeyboardButton(text="➡️ Keyingisi", callback_data="usergenrepage|2")])
+    else:
+        rows.append([InlineKeyboardButton(text="⬅️ Orqaga", callback_data="usergenrepage|1")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+ 
+@dp.message(F.text == "🎭 Janrlar")
+async def genres_menu(message: types.Message):
+    await message.answer("🎭 Janrni tanlang:", reply_markup=build_user_genre_kb(page=1))
+ 
+@dp.callback_query(F.data.startswith("usergenrepage|"))
+async def switch_user_genre_page(call: types.CallbackQuery):
+    page = int(call.data.split("|")[1])
+    try:
+        await call.message.edit_reply_markup(reply_markup=build_user_genre_kb(page=page))
+    except: pass
+    await call.answer()
+ 
+@dp.callback_query(F.data.startswith("genre|"))
+async def genre_list(call: types.CallbackQuery):
+    genre = call.data.split("|")[1]
+    # НОВОЕ: жанры хранятся через запятую (например "love,horror"). Чтобы "love" не зацепил
+    # случайно похожий жанр, оборачиваем поле и искомое значение запятыми с двух сторон.
+    cursor.execute(
+        "SELECT code, description FROM movies WHERE (',' || genre || ',') LIKE ? ORDER BY likes DESC LIMIT 10",
+        (f'%,{genre},%',)
+    )
+    movies = cursor.fetchall()
+    genre_name = GENRES.get(genre, "🎬")
+    if not movies:
+        await call.message.answer(f"❌ {genre_name} janrida hali kino yo'q.")
+        await call.answer()
         return
+    text = f"{genre_name} kinolar:\n\n"
+    for m in movies:
+        desc = (m[1][:40] + "...") if len(m[1]) > 40 else m[1]
+        text += f"🎬 Kod: {m[0]} — {desc}\n"
+    text += "\nKodini yuboring!"
+    await call.message.answer(text)
+    await call.answer()
+ 
+# --- Поиск по названию ---
+@dp.message(F.text == "🔍 Qidirish")
+async def search_start(message: types.Message, state: FSMContext):
+    if not await is_subscribed(message.from_user.id):
+        await message.answer("⚠️ Obuna bo'ling!")
+        return
+    await message.answer("🔍 Kino nomi yoki tavsifidan so'z kiriting:")
+    await state.set_state(SearchMovie.query)
+ 
+@dp.message(SearchMovie.query, ~F.text.startswith("/"))
+async def search_process(message: types.Message, state: FSMContext):
+    query = message.text.strip()
+    cursor.execute(
+        'SELECT code, description, genre FROM movies WHERE description LIKE ? OR code LIKE ? LIMIT 10',
+        (f'%{query}%', f'%{query}%')
+    )
+    results = cursor.fetchall()
+    await state.clear()
+    if not results:
+        await message.answer("❌ Hech narsa topilmadi.")
+        return
+    text = f"🔍 '{query}' bo'yicha natijalar:\n\n"
+    for r in results:
+        desc = (r[1][:50] + "...") if len(r[1]) > 50 else r[1]
+        genre_emoji = genres_display(r[2], emoji_only=True)
+        text += f"{genre_emoji} Kod: {r[0]}\n{desc}\n\n"
+    text += "Kino kodini yuboring!"
+    await message.answer(text)
+ 
+# --- История просмотров ---
+@dp.message(F.text == "📜 Tarix")
+async def watch_history(message: types.Message):
+    cursor.execute(
+        'SELECT code, watched_at FROM history WHERE user_id=? ORDER BY watched_at DESC LIMIT 15',
+        (message.from_user.id,)
+    )
+    rows = cursor.fetchall()
+    if not rows:
+        await message.answer("📜 Siz hali hech narsa ko'rmadingiz.")
+        return
+    text = "📜 Sizning ko'rish tarixingiz:\n\n"
+    for r in rows:
+        code = r[0]
+        date = r[1][:16] if r[1] else ""
+        if code.startswith("series:"):
+            _, sc, ep = code.split(":")
+            text += f"📺 {sc} — {ep}-qism | {date}\n"
+        else:
+            text += f"🎬 {code} | {date}\n"
+    await message.answer(text)
+ 
+ 
+ALL_MENU_BUTTON_TEXTS = [
+    "🎭 Janrlar", "🔍 Qidirish", "📜 Tarix", "📋 Barcha kinolar",
+    "🗂 Tanlov yaratish", "🗂 Tanlovlar", "🎯 Nima ko'raman?", "💾 Bazani yuklab olish",
+    # НОВОЕ: новая кнопка для просмотра списка юзеров тоже должна пропускаться
+    "👥 Foydalanuvchilar"
+]
+ 
+@dp.message(F.text, ~F.text.startswith("/"), ~F.text.in_(ALL_MENU_BUTTON_TEXTS))
+async def search_movie(message: types.Message, state: FSMContext):
  
     if not await is_subscribed(message.from_user.id):
         await message.answer("⚠️ Obuna bo'ling!")
@@ -1186,106 +1337,6 @@ async def confirm_restore(call: types.CallbackQuery):
 @dp.callback_query(F.data == "cancel_restore")
 async def cancel_restore(call: types.CallbackQuery):
     await call.message.edit_text("❌ Bekor qilindi.")
- 
-# --- Жанры ---
-def build_user_genre_kb(page=1):
-    """НОВОЕ: клавиатура жанров для юзера с пагинацией (2 страницы) — не растягивается во весь экран."""
-    rows = []
-    page_keys = GENRES_PAGE_1 if page == 1 else GENRES_PAGE_2
-    for k in page_keys:
-        rows.append([InlineKeyboardButton(text=GENRES.get(k, k), callback_data=f"genre|{k}")])
- 
-    if page == 1:
-        rows.append([InlineKeyboardButton(text="➡️ Keyingisi", callback_data="usergenrepage|2")])
-    else:
-        rows.append([InlineKeyboardButton(text="⬅️ Orqaga", callback_data="usergenrepage|1")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
- 
-@dp.message(F.text == "🎭 Janrlar")
-async def genres_menu(message: types.Message):
-    await message.answer("🎭 Janrni tanlang:", reply_markup=build_user_genre_kb(page=1))
- 
-@dp.callback_query(F.data.startswith("usergenrepage|"))
-async def switch_user_genre_page(call: types.CallbackQuery):
-    page = int(call.data.split("|")[1])
-    try:
-        await call.message.edit_reply_markup(reply_markup=build_user_genre_kb(page=page))
-    except: pass
-    await call.answer()
- 
-@dp.callback_query(F.data.startswith("genre|"))
-async def genre_list(call: types.CallbackQuery):
-    genre = call.data.split("|")[1]
-    # НОВОЕ: жанры хранятся через запятую (например "love,horror"). Чтобы "love" не зацепил
-    # случайно похожий жанр, оборачиваем поле и искомое значение запятыми с двух сторон.
-    cursor.execute(
-        "SELECT code, description FROM movies WHERE (',' || genre || ',') LIKE ? ORDER BY likes DESC LIMIT 10",
-        (f'%,{genre},%',)
-    )
-    movies = cursor.fetchall()
-    genre_name = GENRES.get(genre, "🎬")
-    if not movies:
-        await call.message.answer(f"❌ {genre_name} janrida hali kino yo'q.")
-        await call.answer()
-        return
-    text = f"{genre_name} kinolar:\n\n"
-    for m in movies:
-        desc = (m[1][:40] + "...") if len(m[1]) > 40 else m[1]
-        text += f"🎬 Kod: {m[0]} — {desc}\n"
-    text += "\nKodini yuboring!"
-    await call.message.answer(text)
-    await call.answer()
- 
-# --- Поиск по названию ---
-@dp.message(F.text == "🔍 Qidirish")
-async def search_start(message: types.Message, state: FSMContext):
-    if not await is_subscribed(message.from_user.id):
-        await message.answer("⚠️ Obuna bo'ling!")
-        return
-    await message.answer("🔍 Kino nomi yoki tavsifidan so'z kiriting:")
-    await state.set_state(SearchMovie.query)
- 
-@dp.message(SearchMovie.query, ~F.text.startswith("/"))
-async def search_process(message: types.Message, state: FSMContext):
-    query = message.text.strip()
-    cursor.execute(
-        'SELECT code, description, genre FROM movies WHERE description LIKE ? OR code LIKE ? LIMIT 10',
-        (f'%{query}%', f'%{query}%')
-    )
-    results = cursor.fetchall()
-    await state.clear()
-    if not results:
-        await message.answer("❌ Hech narsa topilmadi.")
-        return
-    text = f"🔍 '{query}' bo'yicha natijalar:\n\n"
-    for r in results:
-        desc = (r[1][:50] + "...") if len(r[1]) > 50 else r[1]
-        genre_emoji = genres_display(r[2], emoji_only=True)
-        text += f"{genre_emoji} Kod: {r[0]}\n{desc}\n\n"
-    text += "Kino kodini yuboring!"
-    await message.answer(text)
- 
-# --- История просмотров ---
-@dp.message(F.text == "📜 Tarix")
-async def watch_history(message: types.Message):
-    cursor.execute(
-        'SELECT code, watched_at FROM history WHERE user_id=? ORDER BY watched_at DESC LIMIT 15',
-        (message.from_user.id,)
-    )
-    rows = cursor.fetchall()
-    if not rows:
-        await message.answer("📜 Siz hali hech narsa ko'rmadingiz.")
-        return
-    text = "📜 Sizning ko'rish tarixingiz:\n\n"
-    for r in rows:
-        code = r[0]
-        date = r[1][:16] if r[1] else ""
-        if code.startswith("series:"):
-            _, sc, ep = code.split(":")
-            text += f"📺 {sc} — {ep}-qism | {date}\n"
-        else:
-            text += f"🎬 {code} | {date}\n"
-    await message.answer(text)
  
 # --- Подписка на уведомления о сериале ---
 @dp.callback_query(F.data.startswith("notif_series|"))
