@@ -66,6 +66,11 @@ try:
     cursor.execute('ALTER TABLE users ADD COLUMN notify_series INTEGER DEFAULT 1')
     conn.commit()
 except: pass
+# НОВОЕ: для контроля доступа к 18+ контенту — запоминаем что юзер подтвердил возраст
+try:
+    cursor.execute('ALTER TABLE users ADD COLUMN age_confirmed INTEGER DEFAULT 0')
+    conn.commit()
+except: pass
  
 cursor.execute('''CREATE TABLE IF NOT EXISTS history (
     user_id INTEGER,
@@ -143,8 +148,23 @@ GENRES = {
     "fantasy": "🪄 Fantastika",
     "cartoon": "🎠 Multfilm",
     "series": "📺 Serial",
+    "dorama": "🌸 Dorama",
+    "anime": "🇯🇵 Anime",
+    "documentary": "🎥 Hujjatli",
+    "historical": "🏛 Tarixiy",
+    "musical": "🎵 Musiqali",
+    "biography": "📖 Biografik",
+    "mystery": "🕵️ Detektiv",
+    "sport": "⚽ Sport",
+    "war": "⚔️ Urush",
+    "family": "👨‍👩‍👧 Oilaviy",
+    "adult18": "🔞 18+",
     "other": "🎬 Boshqa"
 }
+ 
+# НОВОЕ: жанры разбиты на 2 страницы, чтобы клавиатура не растягивалась во весь экран
+GENRES_PAGE_1 = ["action", "comedy", "drama", "horror", "love", "thriller", "fantasy", "cartoon", "series", "dorama"]
+GENRES_PAGE_2 = ["anime", "documentary", "historical", "musical", "biography", "mystery", "sport", "war", "family", "adult18", "other"]
  
 admin_kb = ReplyKeyboardMarkup(keyboard=[
     [KeyboardButton(text="➕ Kino qo'shish"), KeyboardButton(text="🗑 Kino o'chirish")],
@@ -585,13 +605,23 @@ async def get_code_new(message: types.Message, state: FSMContext):
     await message.answer("📝 Kinosining tavsifini yozing:")
     await state.set_state(AddMovieNew.description)
  
-def build_genre_select_kb(selected_genres):
-    """НОВОЕ: клавиатура мультивыбора жанров — отмеченные жанры показываются с галочкой ✅"""
+def build_genre_select_kb(selected_genres, page=1):
+    """НОВОЕ: клавиатура мультивыбора жанров с пагинацией (2 страницы), чтобы
+    список не растягивался во весь экран. Отмеченные жанры показываются с галочкой ✅."""
     rows = []
-    for k, v in GENRES.items():
+    page_keys = GENRES_PAGE_1 if page == 1 else GENRES_PAGE_2
+    for k in page_keys:
+        v = GENRES.get(k, k)
         text = f"✅ {v}" if k in selected_genres else v
         rows.append([InlineKeyboardButton(text=text, callback_data=f"togglegenre|{k}")])
-    rows.append([InlineKeyboardButton(text="✔️ Tayyor", callback_data="genredone")])
+ 
+    if page == 1:
+        rows.append([InlineKeyboardButton(text="➡️ Keyingisi", callback_data="genrepage|2")])
+    else:
+        rows.append([
+            InlineKeyboardButton(text="⬅️ Orqaga", callback_data="genrepage|1"),
+            InlineKeyboardButton(text="✔️ Tayyor", callback_data="genredone")
+        ])
     return InlineKeyboardMarkup(inline_keyboard=rows)
  
 @dp.message(AddMovieNew.description, ~F.text.startswith("/"))
@@ -599,9 +629,19 @@ async def get_description_new(message: types.Message, state: FSMContext):
     await state.update_data(description=message.text, selected_genres=[])
     await message.answer(
         "🎭 Janrlarni tanlang (bir nechtasini tanlash mumkin), so'ng \"✔️ Tayyor\" tugmasini bosing:",
-        reply_markup=build_genre_select_kb([])
+        reply_markup=build_genre_select_kb([], page=1)
     )
     await state.set_state(AddMovieNew.genre)
+ 
+@dp.callback_query(F.data.startswith("genrepage|"), AddMovieNew.genre)
+async def switch_genre_page(call: types.CallbackQuery, state: FSMContext):
+    page = int(call.data.split("|")[1])
+    data = await state.get_data()
+    selected = data.get('selected_genres', [])
+    try:
+        await call.message.edit_reply_markup(reply_markup=build_genre_select_kb(selected, page=page))
+    except: pass
+    await call.answer()
  
 @dp.callback_query(F.data.startswith("togglegenre|"), AddMovieNew.genre)
 async def toggle_genre(call: types.CallbackQuery, state: FSMContext):
@@ -613,8 +653,10 @@ async def toggle_genre(call: types.CallbackQuery, state: FSMContext):
     else:
         selected.append(genre)
     await state.update_data(selected_genres=selected)
+    # НОВОЕ: определяем текущую страницу по тому, на какой странице находится жанр
+    page = 1 if genre in GENRES_PAGE_1 else 2
     try:
-        await call.message.edit_reply_markup(reply_markup=build_genre_select_kb(selected))
+        await call.message.edit_reply_markup(reply_markup=build_genre_select_kb(selected, page=page))
     except: pass
     await call.answer()
  
@@ -927,9 +969,27 @@ async def search_movie(message: types.Message, state: FSMContext):
         return
  
     # Проверяем фильм
-    cursor.execute('SELECT code, file_id, description, likes, dislikes FROM movies WHERE code = ?', (text,))
+    cursor.execute('SELECT code, file_id, description, likes, dislikes, genre FROM movies WHERE code = ?', (text,))
     res = cursor.fetchone()
     if res:
+        # НОВОЕ: если у фильма стоит тег 18+, проверяем подтвердил ли юзер возраст ранее
+        genre_field = res[5] or ""
+        is_adult = f",{genre_field},".find(",adult18,") != -1 if genre_field else False
+        if is_adult:
+            cursor.execute('SELECT age_confirmed FROM users WHERE user_id=?', (message.from_user.id,))
+            age_row = cursor.fetchone()
+            if not age_row or age_row[0] != 1:
+                kb = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="✅ Ha, menga 18 yosh to'ldi", callback_data=f"ageconfirm|{text}")],
+                    [InlineKeyboardButton(text="❌ Yo'q, ortga", callback_data="agecancel")]
+                ])
+                await message.answer(
+                    "🔞 Diqqat! Bu kino 18+ yosh chegarasiga ega (jangari/romantik sahnalar bo'lishi mumkin).\n\n"
+                    "Sizga 18 yosh to'ldimi?",
+                    reply_markup=kb
+                )
+                return
+ 
         cursor.execute('UPDATE users SET viewed_count = viewed_count + 1 WHERE user_id = ?', (message.from_user.id,))
         cursor.execute('UPDATE movies SET view_count = view_count + 1 WHERE code = ?', (res[0],))
         conn.commit()
@@ -939,6 +999,36 @@ async def search_movie(message: types.Message, state: FSMContext):
                              caption=f"{res[2]}\n\n🎬 Kod: {message.text}", reply_markup=kb)
     else:
         await message.answer("❌ Topilmadi. 🔍 Qidirish tugmasi orqali nom bo'yicha qidiring!")
+ 
+# НОВОЕ: обработка подтверждения возраста для 18+ контента
+@dp.callback_query(F.data.startswith("ageconfirm|"))
+async def age_confirm(call: types.CallbackQuery):
+    code = call.data.split("|", 1)[1]
+    cursor.execute('UPDATE users SET age_confirmed=1 WHERE user_id=?', (call.from_user.id,))
+    conn.commit()
+    cursor.execute('SELECT code, file_id, description, likes, dislikes FROM movies WHERE code = ?', (code,))
+    res = cursor.fetchone()
+    if not res:
+        await call.answer("❌ Topilmadi.", show_alert=True)
+        return
+    cursor.execute('UPDATE users SET viewed_count = viewed_count + 1 WHERE user_id = ?', (call.from_user.id,))
+    cursor.execute('UPDATE movies SET view_count = view_count + 1 WHERE code = ?', (res[0],))
+    conn.commit()
+    add_to_history(call.from_user.id, res[0])
+    kb = build_movie_kb(call.from_user.id, res[0], res[3], res[4])
+    try:
+        await call.message.delete()
+    except: pass
+    await bot.send_video(call.message.chat.id, res[1],
+                         caption=f"{res[2]}\n\n🎬 Kod: {code}", reply_markup=kb)
+    await call.answer()
+ 
+@dp.callback_query(F.data == "agecancel")
+async def age_cancel(call: types.CallbackQuery):
+    try:
+        await call.message.delete()
+    except: pass
+    await call.answer()
  
 # ============================================================
 # НОВЫЕ ХЕНДЛЕРЫ
@@ -1098,12 +1188,30 @@ async def cancel_restore(call: types.CallbackQuery):
     await call.message.edit_text("❌ Bekor qilindi.")
  
 # --- Жанры ---
+def build_user_genre_kb(page=1):
+    """НОВОЕ: клавиатура жанров для юзера с пагинацией (2 страницы) — не растягивается во весь экран."""
+    rows = []
+    page_keys = GENRES_PAGE_1 if page == 1 else GENRES_PAGE_2
+    for k in page_keys:
+        rows.append([InlineKeyboardButton(text=GENRES.get(k, k), callback_data=f"genre|{k}")])
+ 
+    if page == 1:
+        rows.append([InlineKeyboardButton(text="➡️ Keyingisi", callback_data="usergenrepage|2")])
+    else:
+        rows.append([InlineKeyboardButton(text="⬅️ Orqaga", callback_data="usergenrepage|1")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+ 
 @dp.message(F.text == "🎭 Janrlar")
 async def genres_menu(message: types.Message):
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=v, callback_data=f"genre|{k}")] for k, v in GENRES.items()
-    ])
-    await message.answer("🎭 Janrni tanlang:", reply_markup=kb)
+    await message.answer("🎭 Janrni tanlang:", reply_markup=build_user_genre_kb(page=1))
+ 
+@dp.callback_query(F.data.startswith("usergenrepage|"))
+async def switch_user_genre_page(call: types.CallbackQuery):
+    page = int(call.data.split("|")[1])
+    try:
+        await call.message.edit_reply_markup(reply_markup=build_user_genre_kb(page=page))
+    except: pass
+    await call.answer()
  
 @dp.callback_query(F.data.startswith("genre|"))
 async def genre_list(call: types.CallbackQuery):
